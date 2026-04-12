@@ -1,0 +1,236 @@
+[
+  {
+    "id": 1,
+    "original_text": "Me da risa cuando me dicen “¿y qué hiciste este finde?”, como si hubiera hecho paracaidismo o algún deporte extremo. Tengo 30, fui al súper, lavé ropa, ordené mi cuarto, me tomé un vinito y avancé unos capítulos de mi serie.",
+    "analysis": {
+      "entities": [
+        {
+          "id": "Author",
+          "type": "Person"
+        },
+        {
+          "id": "Target",
+          "type": "Person"
+        },
+        {
+          "id": "Súper",
+          "type": "Location"
+        },
+        {
+          "id": "Vinito",
+          "type": "Institution"
+        }
+      ],
+      "relationships": [
+        {
+          "source": "Author",
+          "target": "Target",
+          "interaction_type": "criticizes",
+          "taxonomy_classification": "RADICALISM",
+          "confidence_reasoning": "The text uses a sarcastic tone to criticize the expectation of having an exciting weekend, implying that the common perception of a 'fun' weekend is radical or extreme.",
+          "accuracy": "80%"
+        },
+        {
+          "source": "Author",
+          "target": "Target",
+          "interaction_type": "asks",
+          "taxonomy_classification": "SENTIMENTAL",
+          "confidence_reasoning": "Neutral interaction mapped to Sentimental.",
+          "accuracy": "95%"
+        },
+        {
+          "source": "Author",
+          "target": "Súper",
+          "interaction_type": "visited",
+          "taxonomy_classification": "SENTIMENTAL",
+          "confidence_reasoning": "Neutral interaction mapped to Sentimental.",
+          "accuracy": "95%"
+        },
+        {
+          "source": "Author",
+          "target": "Author",
+          "interaction_type": "drinks",
+          "taxonomy_classification": "SENTIMENTAL",
+          "confidence_reasoning": "Neutral interaction mapped to Sentimental.",
+          "accuracy": "95%"
+        },
+        {
+          "source": "Author",
+          "target": "Author",
+          "interaction_type": "watches",
+          "taxonomy_classification": "SENTIMENTAL",
+          "confidence_reasoning": "Neutral interaction mapped to Sentimental.",
+          "accuracy": "95%"
+        }
+      ]
+    }
+  },
+  {
+    "id": 2,
+    "original_text": "Hoy lloré: un compañero de trabajo que está endeudado hasta la chota ahorró no almorzando ni comprando nada en todo el día desde hace meses para comprarle un regalo de cumpleaños a la esposa, ayer se lo dió y hoy me mostró emocionado todo lloroso las fotos de ella re contenta",
+    "analysis": {
+      "entities": [
+        {
+          "id": "Compañero de trabajo",
+          "type": "Person"
+        },
+        {
+          "id": "Ese compañero de trabajo",
+          "type": "Person"
+        },
+        {
+          "id": "La esposa",
+          "type": "Person"
+        },
+        {
+          "id": "Yo",
+          "type": "Person"
+        },
+        {
+          "id": "La chota",
+          "type": "Location"
+        }
+      ],
+      "relationships": [
+        {
+          "source": "Yo",
+          "target": "Compañero de trabajo",
+          "interaction_type": "ayuda",
+          "taxonomy_classification": "SENTIMENTAL",
+          "confidence_reasoning": "Neutral interaction mapped to Sentimental.",
+          "accuracy": "90%"
+        },
+        {
+          "source": "Compañero de trabajo",
+          "target": "La esposa",
+          "interaction_type": "compra regalo",
+          "taxonomy_classification": "SENTIMENTAL",
+          "confidence_reasoning": "Neutral interaction mapped to Sentimental.",
+          "accuracy": "95%"
+        },
+        {
+          "source": "Compañero de trabajo",
+          "target": "Yo",
+          "interaction_type": "muestra emocion",
+          "taxonomy_classification": "SENTIMENTAL",
+          "confidence_reasoning": "Neutral interaction mapped to Sentimental.",
+          "accuracy": "90%"
+        },
+        {
+          "source": "Compañero de trabajo",
+          "target": "La esposa",
+          "interaction_type": "regala",
+          "taxonomy_classification": "SENTIMENTAL",
+          "confidence_reasoning": "Neutral interaction mapped to Sentimental.",
+          "accuracy": "90%"
+        }
+      ]
+    }
+  },
+  {
+    "id": 3,
+    "original_text": "Why does everyone force introverts to leave their comfort zone, but no one forces extroverts to shut up for a while? Why???",
+    "analysis": {
+      "entities": [
+        {
+          "id": "Author",
+          "type": "Person"
+        },
+        {
+          "id": "Introverts",
+          "type": "Group"
+        },
+        {
+          "id": "Extroverts",
+          "type": "Group"
+        }
+      ],
+      "relationships": [
+        {
+          "source": "Author",
+          "target": "Introverts",
+          "interaction_type": "criticizes",
+          "taxonomy_classification": "EXTREMIST",
+          "confidence_reasoning": "The statement uses rhetorical questions and a confrontational tone, implying that extroverts are being unfairly privileged, which is an extreme and biased perspective.",
+          "accuracy": "80%"
+        },
+        {
+          "source": "Author",
+          "target": "Extroverts",
+          "interaction_type": "compares",
+          "taxonomy_classification": "EXTREMIST",
+          "confidence_reasoning": "The statement is an extreme generalization and uses rhetorical questions to emphasize a perceived injustice, which is a characteristic of extremist views.",
+          "accuracy": "80%"
+        }
+      ]
+    }
+  },
+  {
+    "id": 4,
+    "original_text": "If you’re the type who just wants to get close to the girls, stop! don’t! But if you really know what you’re doing and genuinely want the best for them without having creepy thoughts, then I wish you luck!",
+    "analysis": {
+      "entities": [
+        {
+          "id": "Author",
+          "type": "Person"
+        },
+        {
+          "id": "Target",
+          "type": "Person"
+        },
+        {
+          "id": "Girls",
+          "type": "Group"
+        }
+      ],
+      "relationships": [
+        {
+          "source": "Author",
+          "target": "Target",
+          "interaction_type": "advises",
+          "taxonomy_classification": "EXTREMIST",
+          "confidence_reasoning": "The statement contains an extreme and absolute warning ('stop! don't!') which may be perceived as aggressive or dismissive, and also includes a conditional statement with a tone of superiority ('if you really know what you're doing'). This suggests an extremist approach to advice-giving.",
+          "accuracy": "80%"
+        },
+        {
+          "source": "Author",
+          "target": "Girls",
+          "interaction_type": "cautions",
+          "taxonomy_classification": "EXTREMIST",
+          "confidence_reasoning": "The statement contains a strong warning and a condition for being allowed to get close to girls, which implies a sense of exclusivity and judgment. The tone is also somewhat confrontational and dismissive.",
+          "accuracy": "80%"
+        }
+      ]
+    }
+  },
+  {
+    "id": 5,
+    "original_text": "I was taken to the Brazilian Supreme Court for saying the most voted \"woman\" in the country is actually a man. After five years of persecution, I won.",
+    "analysis": {
+      "entities": [
+        {
+          "id": "Author",
+          "type": "Person"
+        },
+        {
+          "id": "Brazilian Supreme Court",
+          "type": "Institution"
+        },
+        {
+          "id": "Brazil",
+          "type": "Location"
+        }
+      ],
+      "relationships": [
+        {
+          "source": "Author",
+          "target": "Brazilian Supreme Court",
+          "interaction_type": "was taken to",
+          "taxonomy_classification": "EXTREMIST",
+          "confidence_reasoning": "The statement is an extreme opinion that challenges the widely accepted fact about the most voted woman in the country, and the author's victory after five years of persecution suggests a strong conviction.",
+          "accuracy": "80%"
+        }
+      ]
+    }
+  }
+]
