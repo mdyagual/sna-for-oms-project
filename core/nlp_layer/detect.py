@@ -4,16 +4,13 @@ import time
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# from dotenv import load_dotenv
 from huggingface_hub import InferenceClient
 
-# 1. ENVIRONMENT SETUP
-# load_dotenv()
 HF_TOKEN = os.getenv("HF_TOKEN")
 client = InferenceClient(token=HF_TOKEN)
 
-## KG
-STAGE1_MODEL = "meta-llama/Llama-3.1-8B-Instruct"
+## Extractor model
+MODEL_EXTR = "meta-llama/Llama-3.1-8B-Instruct"
 
 ## DETECTION TAXONOMY
 # Sentimental and Emotional
@@ -23,21 +20,25 @@ MODEL_GROUP_B = "facebook/roberta-hate-speech-dynabench-r4-target"
 # Extremist, Radicalism and Violated-scaled
 MODEL_GROUP_C = "meta-llama/Meta-Llama-3-8B-Instruct"
 
-# 2. STAGE 1 PROMPT (Base Graph Extraction)
-STAGE_1_PROMPT = """
+# 2. MAIN PROMPT (Base Graph Extraction)
+MAIN_PROMPT = """
 You are an expert Intelligence Analyst specialized in Social Network Analysis (SNA).
 Your task is to extract a base graph (Entities and Relationships) from the text.
 
 RULES:
-- Extract ONLY socially relevant entities (Person, Group, Institution, Location).
-- Replace pronouns with "Author" or "Target".
+- Extract ONLY socially relevant entities (Person, Group, Institution, Location, Target).
+- Resolve pronouns to their actual entity names based on the context. (DO NOT use generic terms like "Author").
 - Extract relationships ONLY if there is meaningful interaction or implied action.
-- interaction_type must be a specific verb (e.g., "criticizes", "supports", "threatens").
+- The 'predicate' must be a specific, normalized verb (e.g., "instructs", "relocates", "threatens").
 
 CRITICAL: OUTPUT ONLY VALID JSON. START DIRECTLY WITH {:
 {
-  "entities": [{"id": "Name", "type": "Type"}],
-  "relationships": [{"source": "Name", "target": "Name", "interaction_type": "Verb"}]
+  "entities": [
+    {"entity": "Name", "label": "Type"}
+  ],
+  "relations": [
+    {"subject": "Name", "predicate": "Verb", "object": "Name"}
+  ]
 }
 """
 
@@ -87,126 +88,107 @@ def call_complet(sel_model, l_info=[],  max_tokens=150, temperature=0.1):
 
 
 # 4. STAGE 2: ROUTING & CLASSIFICATION
-def classify_relation(original_text, rel):
-    source = rel.get("source", "Unknown")
-    target = rel.get("target", "Unknown")
-    interaction = rel.get("interaction_type", "interaction")
-    interaction_text = f"{source} {interaction} {target}".lower()
-
+def get_master_taxonomy(original_text):
+    """
+    Arbitrator function: Runs the text through the models and applies a hierarchy
+    to select EXACTLY ONE taxonomy category for the entire log.
+    """
     try:
-        # GROUP A: Sentimental/Emotional
-        if any(
-            w in interaction_text
-            for w in [
-                "feel",
-                "think",
-                "love",
-                "opinion",
-                "sad",
-                "cry",
-                "admira",
-                "cuida",
-                "gracias",
-                "llora",
-                "emociona",
-                "empolga",
-                "gosta",
-                "ama",
-                "sente",
-                "deseja",
-                "espera",
-            ]
-        ):
+        # --- 1. Query Group B (Hate Speech) ---
+        res_b = retry_call(lambda: call_classif(original_text, MODEL_GROUP_B))
+        score_b = res_b.score
+        label_b = res_b.label # Usually 'hate' or 'nothate'
         
-            res = retry_call(lambda: call_classif(original_text, MODEL_GROUP_A))
-            label = "EMOTIONAL" if res.label == "negative" else "SENTIMENTAL"
+        # --- 2. Query Group A (Sentiment) ---
+        res_a = retry_call(lambda: call_classif(original_text, MODEL_GROUP_A))
+        score_a = res_a.score
+        label_a = res_a.label # Usually 'positive', 'neutral', 'negative'
+
+        # --- 3. Query Group C (Llama-3 Reasoner for High-Tier Threats) ---
+        prompt_c = f"""Analyze the following text: '{original_text}'. 
+        Classify it strictly into EXACTLY ONE of these categories: 
+        EXTREMIST, RADICALISM, THREAT, VIOLATED-SCALED, or NEUTRAL.
+        
+        OUTPUT ONLY VALID JSON:
+        {{
+          "taxonomy_classification": "CATEGORY",
+          "confidence_reasoning": "Brief reason why"
+        }}"""
+        res_text_c = retry_call(lambda: call_complet(MODEL_GROUP_C, [{"role": "user", "content": prompt_c}]))
+        data_c = safe_json_load(res_text_c)
+        label_c = data_c.get("taxonomy_classification", "NEUTRAL")
+
+        # ==========================================
+        # THE ARBITRATOR HIERARCHY (Highest to Lowest)
+        # ==========================================
+        
+        # TIER 1: Critical Threats (Llama C output)
+        if label_c in ["EXTREMIST", "RADICALISM", "THREAT", "VIOLATED-SCALED"]:
             return {
-                "taxonomy_classification": label,
-                "confidence_reasoning": f"Group A Encoder detected {res.label} sentiment.",
-                "accuracy": f"{round(res.score * 100, 2)}%",
+                "taxonomy_category": label_c,
+                "reason": data_c.get("confidence_reasoning", "Detected by Group C")
             }
-
-        # GROUP B: Hate/Threat
-        if any(
-            w in interaction_text
-            for w in [
-                "insult",
-                "threat",
-                "kill",
-                "attack",
-                "hate",
-                "slur",
-                "violencia",
-                "insulta",
-                "ataca",
-                "mata",
-                "odio",
-                "amenaza",
-                "agride",
-                "ofende",
-            ]
-        ):
             
-            res = retry_call(lambda: call_classif(original_text, MODEL_GROUP_B))
-            label = "HATE" if res.label == "hate" else "THREAT"
+        # TIER 2: Hate Speech (RoBERTa B output)
+        # Only accept if the model is highly confident it IS hate (> 75%)
+        if label_b == "hate" and score_b > 0.75:
             return {
-                "taxonomy_classification": label,
-                "confidence_reasoning": f"Group B Encoder detected {res.label} speech.",
-                "accuracy": f"{round(res.score * 100, 2)}%",
+                "taxonomy_category": "HATE",
+                "reason": f"Group B detected hate with {round(score_b*100, 1)}% confidence"
             }
-
-        # GROUP C: Reasoners (Extremist/Radicalism/Violated)
-        else:
-            prompt = f"""Analyze: '{source}' {interaction} '{target}' in text: '{original_text}'. 
-            Classify strictly as: EXTREMIST, RADICALISM, VIOLATED, or NEUTRAL.
             
-            OUTPUT ONLY VALID JSON:
-            {{
-              "taxonomy_classification": "CATEGORY",
-              "confidence_reasoning": "Reason",
-              "accuracy": "Self-estimated percentage (e.g. 85%)"
-            }}"""
-
-            res_text = retry_call(lambda: call_complet(MODEL_GROUP_C, [{"role": "user", "content": prompt}]) )
-            data = safe_json_load(res_text)
-
-            # Map NEUTRAL to SENTIMENTAL for 7-category taxonomy compliance
-            if data.get("taxonomy_classification") == "NEUTRAL":
-                data["taxonomy_classification"] = "SENTIMENTAL"
-                data["confidence_reasoning"] = (
-                    "Neutral interaction mapped to Sentimental."
-                )
-
-            return data
-
-    except Exception as e:
+        # TIER 3: Emotional/Sentimental (RoBERTa A output)
+        if label_a == "negative" and score_a > 0.60:
+            return {
+                "taxonomy_category": "EMOTIONAL",
+                "reason": f"Group A detected negative emotion with {round(score_a*100, 1)}% confidence"
+            }
+        elif label_a in ["positive", "neutral"]:
+            return {
+                "taxonomy_category": "SENTIMENTAL",
+                "reason": f"Group A detected {label_a} sentiment with {round(score_a*100, 1)}% confidence"
+            }
+            
+        # Fallback
         return {
-            "taxonomy_classification": "SENTIMENTAL",
-            "confidence_reasoning": f"Fallback due to API error: {str(e)}",
-            "accuracy": "N/A",
+            "taxonomy_category": "SENTIMENTAL",
+            "reason": "Fallback: Did not trigger higher threat thresholds."
         }
 
+    except Exception as e:
+        return {"taxonomy_category": "ERROR", "reason": f"API Error: {str(e)}"}
 
 # 5. MAIN BATCH PROCESSOR
 def process_entry(idx, text):
-    print(f"[{idx}] Stage 1: Extraction...")
-    s1_res = retry_call(lambda: call_complet(STAGE1_MODEL, [{"role": "system", "content": STAGE_1_PROMPT},{"role": "user", "content": text}], max_tokens=1000))
+    print(f"[{idx}] Stage 1: Extraction (Graph)...")
+    s1_res = retry_call(lambda: call_complet(MODEL_EXTR, [{"role": "system", "content": MAIN_PROMPT},{"role": "user", "content": text}], max_tokens=1000))
     graph = safe_json_load(s1_res)
 
-    if "relationships" in graph and isinstance(graph["relationships"], list):
-        print(
-            f"[{idx}] Stage 2: Routing {len(graph['relationships'])} relationships..."
-        )
-        for rel in graph["relationships"]:
-            tax_data = classify_relation(text, rel)
-            rel.update(tax_data)
+    print(f"[{idx}] Stage 2: Taxonomy Arbitration...")
+    taxonomy_result = get_master_taxonomy(text)
 
-    return {"id": idx, "original_text": text, "analysis": graph}
+    # Safely extract the arrays from Llama's JSON, defaulting to empty lists if it failed
+    entities_list = graph.get("entities", [])
+    relations_list = graph.get("relations", [])
 
+    # Build the flattened, final JSON structure
+    final_output = {
+        "id": idx,  # Highly recommended to keep for database tracking
+        "log_text": text,
+        "taxonomy_category": taxonomy_result.get("taxonomy_category", "ERROR"),
+        "reasoning": taxonomy_result.get("reason", ""),
+        "entities": entities_list,
+        "relations": relations_list
+    }
+
+    return final_output
+
+
+### THE MAIN FUNCTION
 
 def run_batch_test():
-    input_file = "examples.txt"
-    output_file = "results/extraction_results.json"
+    input_file = "./data/logs/examples.txt"
+    output_file = "./data/jsons/extraction_results.json"
     os.makedirs("results", exist_ok=True)
 
     try:
