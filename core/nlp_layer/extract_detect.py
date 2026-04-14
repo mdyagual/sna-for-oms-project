@@ -2,9 +2,12 @@ import os
 import json
 import time
 import re
+import pandas as pd
+from core.schemas import OMSLog
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from huggingface_hub import InferenceClient
+from huggingface_hub.utils import HfHubHTTPError
 
 HF_TOKEN = os.getenv("HF_TOKEN")
 client = InferenceClient(token=HF_TOKEN)
@@ -27,6 +30,7 @@ Your task is to extract a base graph (Entities and Relationships) from the text.
 
 RULES:
 - Extract ONLY socially relevant entities (Person, Group, Institution, Location, Target).
+- EXCLUDE the reporting officer or system administrator from the extracted network. Focus only on the relationships between the subjects of the report (e.g., inmates, visitors, external contacts)
 - Resolve pronouns to their actual entity names based on the context. (DO NOT use generic terms like "Author").
 - Extract relationships ONLY if there is meaningful interaction or implied action.
 - The 'predicate' must be a specific, normalized verb (e.g., "instructs", "relocates", "threatens").
@@ -64,13 +68,31 @@ def safe_json_load(content):
 
 
 def retry_call(fn, retries=3):
+    base_wait_time = 10 # Start by waiting 10 seconds on the first failure
+    
     for i in range(retries):
         try:
             return fn()
-        except Exception:
+        except HfHubHTTPError as e:
+            # Check specifically for a 429 Rate Limit error
+            if e.response.status_code == 429:
+                wait_time = base_wait_time * (2 ** i) # 10s, 20s, 40s, 80s...
+                print(f"  [Rate Limit Hit] Waiting {wait_time} seconds before retrying...")
+                time.sleep(wait_time)
+            else:
+                # If it's a 500 or 503 error (Server overloaded), also wait
+                print(f"  [Server Error {e.response.status_code}] Retrying in 5 seconds...")
+                time.sleep(5)
+                
             if i == retries - 1:
-                raise
-            time.sleep(2.5 * (i + 1))
+                print("  [Failed] Maximum retries reached.")
+                raise e
+        except Exception as e:
+            # Catch any other random network disconnects
+            print(f"  [Network Error] {str(e)[:50]}... Retrying...")
+            time.sleep(5)
+            if i == retries - 1:
+                raise e
 
 
 def call_classif(or_text, sel_model):
@@ -183,38 +205,61 @@ def process_entry(idx, text):
 
     return final_output
 
+def ingest_csv(filepath: str):
+    df = pd.read_csv(filepath)
+    
+    # Convert CSV rows into structured Python objects
+    logs = []
+    for _, row in df.iterrows():
+        log = OMSLog(
+            log_id=str(row['DR_NO']),
+            date=str(row['Date Rptd']),
+            log_text=str(row['Crm Cd Desc'])
+        )
+        logs.append(log)
+    
+    return logs
 
 ### THE MAIN FUNCTION
 
 def run_batch_test():
-    input_file = "./data/logs/examples.txt"
     output_file = "./data/jsons/extraction_results.json"
-
     try:
-        with open(input_file, "r", encoding="utf-8") as f:
-            lines = [l.strip() for l in f if len(l.strip()) > 5]
-
-        print(f"Starting Two-Stage Pipeline for {len(lines)} examples...\n")
+        # 1. Load all logs into memory
+        my_logs = ingest_csv("./data/logs/oms_reports.csv")
+        print(f"Starting Two-Stage Pipeline for {len(my_logs)} examples...\n")
         final_results = []
 
+        # 2. Open the Thread Pool ONCE
         with ThreadPoolExecutor(max_workers=2) as executor:
+            
+            # 3. Submit all tasks to the pool
+            # This creates a "future" (a promise of a result) for every log
             futures = [
-                executor.submit(process_entry, i + 1, text)
-                for i, text in enumerate(lines)
+                executor.submit(process_entry, log.log_id, log.log_text)
+                for log in my_logs
             ]
+            
+            # 4. As each thread finishes its job, append the result to our list
             for future in as_completed(futures):
-                final_results.append(future.result())
+                try:
+                    data = future.result()
+                    final_results.append(data)
+                except Exception as exc:
+                    print(f"A log processing generated an exception: {exc}")
 
-        final_results.sort(key=lambda x: x["id"])
+        # 5. Sort ONCE after all threads are completely finished
+        # Casting to string ensures sorting doesn't crash if IDs are a mix of ints and strings
+        final_results.sort(key=lambda x: str(x.get("id", "")))
 
+        # 6. Save to disk
         with open(output_file, "w", encoding="utf-8") as f:
             json.dump(final_results, f, indent=2, ensure_ascii=False)
 
         print(f"\nSuccess! Results saved to {output_file}")
 
     except FileNotFoundError:
-        print("Error: examples.txt not found.")
-
+        print("Error: File that contains the logs/reports cannot be found.")
 
 ###### MAIN
 
