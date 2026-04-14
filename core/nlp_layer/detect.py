@@ -189,7 +189,6 @@ def process_entry(idx, text):
 def run_batch_test():
     input_file = "./data/logs/examples.txt"
     output_file = "./data/jsons/extraction_results.json"
-    os.makedirs("results", exist_ok=True)
 
     try:
         with open(input_file, "r", encoding="utf-8") as f:
