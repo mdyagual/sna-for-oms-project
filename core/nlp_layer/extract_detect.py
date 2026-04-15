@@ -3,8 +3,6 @@ import json
 import time
 import re
 import pandas as pd
-from core.schemas import OMSLog
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from huggingface_hub import InferenceClient
 from huggingface_hub.utils import HfHubHTTPError
@@ -67,9 +65,8 @@ def safe_json_load(content):
     return d_log
 
 
-def retry_call(fn, retries=3):
-    base_wait_time = 10 # Start by waiting 10 seconds on the first failure
-    
+def retry_call(fn, retries=5):
+    base_wait_time = 5
     for i in range(retries):
         try:
             return fn()
@@ -81,14 +78,13 @@ def retry_call(fn, retries=3):
                 time.sleep(wait_time)
             else:
                 # If it's a 500 or 503 error (Server overloaded), also wait
-                print(f"  [Server Error {e.response.status_code}] Retrying in 5 seconds...")
+                #print(f"  [Server Error {e.response.status_code}] Retrying in 5 seconds...")
                 time.sleep(5)
                 
             if i == retries - 1:
                 print("  [Failed] Maximum retries reached.")
                 raise e
         except Exception as e:
-            # Catch any other random network disconnects
             print(f"  [Network Error] {str(e)[:50]}... Retrying...")
             time.sleep(5)
             if i == retries - 1:
@@ -109,7 +105,7 @@ def call_complet(sel_model, l_info=[],  max_tokens=150, temperature=0.1):
     return response.choices[0].message.content
 
 
-# 4. STAGE 2: ROUTING & CLASSIFICATION
+# 4. STAGE 2: ROUTING & CLASSIFICATION - TO CHECK
 def get_master_taxonomy(original_text):
     """
     Arbitrator function: Runs the text through the models and applies a hierarchy
@@ -182,7 +178,7 @@ def get_master_taxonomy(original_text):
 
 # 5. MAIN BATCH PROCESSOR
 def process_entry(idx, text):
-    print(f"[{idx}] Stage 1: Extraction (Graph)...")
+    print(f"[{idx}] Stage 1: Extraction of entities and relationships...")
     s1_res = retry_call(lambda: call_complet(MODEL_EXTR, [{"role": "system", "content": MAIN_PROMPT},{"role": "user", "content": text}], max_tokens=1000))
     graph = safe_json_load(s1_res)
 
@@ -204,64 +200,3 @@ def process_entry(idx, text):
     }
 
     return final_output
-
-def ingest_csv(filepath: str):
-    df = pd.read_csv(filepath)
-    
-    # Convert CSV rows into structured Python objects
-    logs = []
-    for _, row in df.iterrows():
-        log = OMSLog(
-            log_id=str(row['DR_NO']),
-            date=str(row['Date Rptd']),
-            log_text=str(row['Crm Cd Desc'])
-        )
-        logs.append(log)
-    
-    return logs
-
-### THE MAIN FUNCTION
-
-def run_batch_test():
-    output_file = "./data/jsons/extraction_results.json"
-    try:
-        # 1. Load all logs into memory
-        my_logs = ingest_csv("./data/logs/oms_reports.csv")
-        print(f"Starting Two-Stage Pipeline for {len(my_logs)} examples...\n")
-        final_results = []
-
-        # 2. Open the Thread Pool ONCE
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            
-            # 3. Submit all tasks to the pool
-            # This creates a "future" (a promise of a result) for every log
-            futures = [
-                executor.submit(process_entry, log.log_id, log.log_text)
-                for log in my_logs
-            ]
-            
-            # 4. As each thread finishes its job, append the result to our list
-            for future in as_completed(futures):
-                try:
-                    data = future.result()
-                    final_results.append(data)
-                except Exception as exc:
-                    print(f"A log processing generated an exception: {exc}")
-
-        # 5. Sort ONCE after all threads are completely finished
-        # Casting to string ensures sorting doesn't crash if IDs are a mix of ints and strings
-        final_results.sort(key=lambda x: str(x.get("id", "")))
-
-        # 6. Save to disk
-        with open(output_file, "w", encoding="utf-8") as f:
-            json.dump(final_results, f, indent=2, ensure_ascii=False)
-
-        print(f"\nSuccess! Results saved to {output_file}")
-
-    except FileNotFoundError:
-        print("Error: File that contains the logs/reports cannot be found.")
-
-###### MAIN
-
-if __name__ == "__main__":
-    run_batch_test()
