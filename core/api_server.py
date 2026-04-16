@@ -9,11 +9,11 @@ app = FastAPI(
 )
 
 # Notice we added response_model=ResponseLog here!
-@app.post("/api/v1/extract", response_model=LogResponse, summary="Extract Graph and Taxonomy from Text")
+@app.post("/api/v1/extract", response_model=LogResponse, summary="Extract entities, relationships and taxonomy from Text")
 def extract_knowledge_graph(request: LogRequest):
     try:
         # Fixed the variable mappings to match your LogRequest schema
-        result = process_entry(idx=request.id, text=request.text)
+        result = process_entry(request.text)
         
         return result
         
