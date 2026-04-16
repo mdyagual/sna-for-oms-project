@@ -1,13 +1,15 @@
 import json
-import time
 import re
+import asyncio
+import logging
 
-from huggingface_hub import InferenceClient
+from huggingface_hub import AsyncInferenceClient
 from huggingface_hub.utils import HfHubHTTPError
 from core.config import token, model, prompt
 
+logger = logging.getLogger(__name__)
+client = AsyncInferenceClient(token=token.HF_TOKEN)
 
-client = InferenceClient(token.HF_TOKEN)
 
 def safe_json_load(content):
     content_str = str(content).strip()
@@ -28,40 +30,40 @@ def safe_json_load(content):
     return d_log
 
 
-def retry_call(fn, retries=5):
+async def async_retry_call(fn, retries=5):
     base_wait_time = 5
     for i in range(retries):
         try:
-            return fn()
+            return await fn()
         except HfHubHTTPError as e:
             # Check specifically for a 429 Rate Limit error
             if e.response.status_code == 429:
                 wait_time = base_wait_time * (2 ** i) # 10s, 20s, 40s, 80s...
-                print(f"  [Rate Limit Hit] Waiting {wait_time} seconds before retrying...")
-                time.sleep(wait_time)
+                logger.warning("Rate limit hit. Waiting %d  before retry...", (wait_time))
+                await asyncio.sleep(wait_time)
             else:
                 # If it's a 500 or 503 error (Server overloaded), also wait
-                #print(f"  [Server Error {e.response.status_code}] Retrying in 5 seconds...")
-                time.sleep(5)
+                logger.warning("Server error %d . Retrying in 5s...", (e.response.status_code))
+                await asyncio.sleep(5) 
                 
             if i == retries - 1:
                 print("  [Failed] Maximum retries reached.")
                 raise e
         except Exception as e:
             print(f"  [Network Error] {str(e)[:50]}... Retrying...")
-            time.sleep(5)
+            await asyncio.sleep(5)
             if i == retries - 1:
                 raise e
 
 
-def call_classif(or_text, sel_model):
-    return client.text_classification(text=or_text, model=sel_model)[0]
+async def call_classif(or_text, sel_model):
+    return (await client.text_classification(text=or_text, model=sel_model))[0]
 
 
-def call_complet(sel_model, l_info=None,  max_tokens=150, temperature=0.1):
+async def call_complet(sel_model, l_info=None,  max_tokens=150, temperature=0.1):
     if l_info is None:
         l_info = []
-    response = client.chat_completion(
+    response = await client.chat_completion(
         model=sel_model,
         messages=l_info,
         max_tokens=max_tokens,
@@ -71,21 +73,8 @@ def call_complet(sel_model, l_info=None,  max_tokens=150, temperature=0.1):
 
 
 # 4. STAGE 2: ROUTING & CLASSIFICATION - TO CHECK
-def get_master_taxonomy(original_text):
-    try:
-       
-        # --- 1. Query Group B (Hate Speech) ---
-        res_b = retry_call(lambda: call_classif(original_text, model.GROUP_B))
-        score_b = res_b.score
-        label_b = res_b.label # Usually 'hate' or 'nothate'
-        
-        # --- 2. Query Group A (Sentiment) ---
-        res_a = retry_call(lambda: call_classif(original_text, model.GROUP_A))
-        score_a = res_a.score
-        label_a = res_a.label # Usually 'positive', 'neutral', 'negative'
-
-        # --- 3. Query Group C (Llama-3 Reasoner for High-Tier Threats) ---
-        prompt_c = f"""Analyze the following text: '{original_text}'. 
+async def get_master_taxonomy(original_text):
+    prompt_c = f"""Analyze the following text: '{original_text}'. 
         Classify it strictly into EXACTLY ONE of these categories: 
         EXTREMIST, RADICALISM, THREAT, VIOLATED-SCALED, or NEUTRAL.
         
@@ -94,8 +83,22 @@ def get_master_taxonomy(original_text):
           "taxonomy_classification": "CATEGORY",
           "confidence_reasoning": "Brief reason why"
         }}"""
-        res_text_c = retry_call(lambda: call_complet(model.GROUP_C, [{"role": "user", "content": prompt_c}]))
-        data_c = safe_json_load(res_text_c)
+    
+    try:
+        res_b, res_a, res_text_c = await asyncio.gather(
+            async_retry_call(lambda: call_classif(original_text, model.GROUP_B)),
+            async_retry_call(lambda: call_classif(original_text, model.GROUP_A)),
+            async_retry_call(lambda: call_complet(model.GROUP_C, [{"role": "user", "content": prompt_c}]))
+        )
+        
+        score_b = res_b.score
+        label_b = res_b.label # Usually 'hate' or 'nothate'
+        
+        
+        score_a = res_a.score
+        label_a = res_a.label 
+
+        data_c = safe_json_load(res_text_c)       
         label_c = data_c.get("taxonomy_classification", "NEUTRAL")
 
         # ==========================================
@@ -139,19 +142,20 @@ def get_master_taxonomy(original_text):
         return {"taxonomy_category": "ERROR", "reason": f"API Error: {str(e)}"}
 
 # 5. MAIN BATCH PROCESSOR
-def process_entry(text):
-    print("Stage 1: Extraction of entities and relationships...")
-    s1_res = retry_call(lambda: call_complet(model.EXTR_ENT_REL, [{"role": "system", "content": prompt.EXTR_ENT_REL},{"role": "user", "content": text}], max_tokens=1000))
+async def process_entry(text):
+    logger.info("Stage 1: Extraction of entities and relationships...")
+    s1_res = await async_retry_call(lambda: call_complet(model.EXTR_ENT_REL, [{"role": "system", "content": prompt.EXTR_ENT_REL},{"role": "user", "content": text}], max_tokens=1000))
     graph = safe_json_load(s1_res)
 
-    print("Stage 2: Taxonomy Arbitration...")
-    taxonomy_result = get_master_taxonomy(text)
+    logger.info("Stage 2: Taxonomy Arbitration...")
+    taxonomy_result = await get_master_taxonomy(text)
 
     # Safely extract the arrays from Llama's JSON, defaulting to empty lists if it failed
     entities_list = graph.get("entities", [])
     relations_list = graph.get("relations", [])
 
     return {
+      
         "log_text": text,
         "taxonomy_category": taxonomy_result.get("taxonomy_category", "ERROR"),
         "reasoning": taxonomy_result.get("reason", ""),

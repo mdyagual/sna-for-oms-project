@@ -22,7 +22,7 @@ class LLMConfig:
     # Extremist, Radicalism and Violated-scaled
     GROUP_C: str = "meta-llama/Meta-Llama-3-8B-Instruct"
 
-@dataclass
+@dataclass(frozen=True)
 class Prompt:
     EXTR_ENT_REL = """
     You are an expert Intelligence Analyst specialized in Social Network Analysis (SNA).
@@ -44,6 +44,7 @@ class Prompt:
         {"subject": "Name", "predicate": "Verb", "object": "Name"}
     ]
     }"""
+    
 
 token = Token()
 model = LLMConfig()

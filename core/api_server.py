@@ -39,13 +39,13 @@ async def load_swagger():
             422: {"description": "Validation error in request body"}
         }
 )
-def extract_knowledge_graph(request: LogRequest):
+async def extract_knowledge_graph(request: LogRequest):
     try:
         logger.info("Processing text of length: %d" , (len(request.text)))
-        result = process_entry(request.text)
-
-        logger.info("Successfully processed entry with ID: %s", (result.get('id')))
-        return result
+        result = await process_entry(request.text)
+        parsed_result = LogResponse(**result)
+        logger.info("Successfully processed entry with ID: %s", (parsed_result.id))
+        return parsed_result
         
     except ValueError as e:
         logger.warning("Validation error: %s", (str(e)))
