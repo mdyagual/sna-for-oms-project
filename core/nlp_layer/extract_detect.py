@@ -21,8 +21,8 @@ MODEL_GROUP_B = "facebook/roberta-hate-speech-dynabench-r4-target"
 # Extremist, Radicalism and Violated-scaled
 MODEL_GROUP_C = "meta-llama/Meta-Llama-3-8B-Instruct"
 
-# 2. MAIN PROMPT (Base Graph Extraction)
-MAIN_PROMPT = """
+# 2. EXTRACTION PROMPT
+EXTR_PROMPT = """
 You are an expert Intelligence Analyst specialized in Social Network Analysis (SNA).
 Your task is to extract a base graph (Entities and Relationships) from the text.
 
@@ -107,10 +107,6 @@ def call_complet(sel_model, l_info=[],  max_tokens=150, temperature=0.1):
 
 # 4. STAGE 2: ROUTING & CLASSIFICATION - TO CHECK
 def get_master_taxonomy(original_text):
-    """
-    Arbitrator function: Runs the text through the models and applies a hierarchy
-    to select EXACTLY ONE taxonomy category for the entire log.
-    """
     try:
         # --- 1. Query Group B (Hate Speech) ---
         res_b = retry_call(lambda: call_classif(original_text, MODEL_GROUP_B))
@@ -177,26 +173,23 @@ def get_master_taxonomy(original_text):
         return {"taxonomy_category": "ERROR", "reason": f"API Error: {str(e)}"}
 
 # 5. MAIN BATCH PROCESSOR
-def process_entry(idx, text):
-    print(f"[{idx}] Stage 1: Extraction of entities and relationships...")
-    s1_res = retry_call(lambda: call_complet(MODEL_EXTR, [{"role": "system", "content": MAIN_PROMPT},{"role": "user", "content": text}], max_tokens=1000))
+def process_entry(text):
+    print("Stage 1: Extraction of entities and relationships...")
+    s1_res = retry_call(lambda: call_complet(MODEL_EXTR, [{"role": "system", "content": EXTR_PROMPT},{"role": "user", "content": text}], max_tokens=1000))
     graph = safe_json_load(s1_res)
 
-    print(f"[{idx}] Stage 2: Taxonomy Arbitration...")
+    print("Stage 2: Taxonomy Arbitration...")
     taxonomy_result = get_master_taxonomy(text)
 
     # Safely extract the arrays from Llama's JSON, defaulting to empty lists if it failed
     entities_list = graph.get("entities", [])
     relations_list = graph.get("relations", [])
 
-    # Build the flattened, final JSON structure
-    final_output = {
-        "id": idx,  # Highly recommended to keep for database tracking
+    return {
         "log_text": text,
         "taxonomy_category": taxonomy_result.get("taxonomy_category", "ERROR"),
         "reasoning": taxonomy_result.get("reason", ""),
         "entities": entities_list,
         "relations": relations_list
-    }
 
-    return final_output
+    }
