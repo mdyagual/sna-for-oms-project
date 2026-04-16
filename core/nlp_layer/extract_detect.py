@@ -1,51 +1,14 @@
-import os
 import json
 import time
 import re
-import pandas as pd
 
 from huggingface_hub import InferenceClient
 from huggingface_hub.utils import HfHubHTTPError
-
-HF_TOKEN = os.getenv("HF_TOKEN")
-client = InferenceClient(token=HF_TOKEN)
-
-## Extractor model
-MODEL_EXTR = "meta-llama/Llama-3.1-8B-Instruct"
-
-## DETECTION TAXONOMY
-# Sentimental and Emotional
-MODEL_GROUP_A = "cardiffnlp/twitter-roberta-base-sentiment-latest"
-# Hate and Threat
-MODEL_GROUP_B = "facebook/roberta-hate-speech-dynabench-r4-target"
-# Extremist, Radicalism and Violated-scaled
-MODEL_GROUP_C = "meta-llama/Meta-Llama-3-8B-Instruct"
-
-# 2. EXTRACTION PROMPT
-EXTR_PROMPT = """
-You are an expert Intelligence Analyst specialized in Social Network Analysis (SNA).
-Your task is to extract a base graph (Entities and Relationships) from the text.
-
-RULES:
-- Extract ONLY socially relevant entities (Person, Group, Institution, Location, Target).
-- EXCLUDE the reporting officer or system administrator from the extracted network. Focus only on the relationships between the subjects of the report (e.g., inmates, visitors, external contacts)
-- Resolve pronouns to their actual entity names based on the context. (DO NOT use generic terms like "Author").
-- Extract relationships ONLY if there is meaningful interaction or implied action.
-- The 'predicate' must be a specific, normalized verb (e.g., "instructs", "relocates", "threatens").
-
-CRITICAL: OUTPUT ONLY VALID JSON. START DIRECTLY WITH {:
-{
-  "entities": [
-    {"entity": "Name", "label": "Type"}
-  ],
-  "relations": [
-    {"subject": "Name", "predicate": "Verb", "object": "Name"}
-  ]
-}
-"""
+from core.config import token, model, prompt
 
 
-# 3. JSON Parser
+client = InferenceClient(token.HF_TOKEN)
+
 def safe_json_load(content):
     content_str = str(content).strip()
     d_log = {}
@@ -95,7 +58,9 @@ def call_classif(or_text, sel_model):
     return client.text_classification(text=or_text, model=sel_model)[0]
 
 
-def call_complet(sel_model, l_info=[],  max_tokens=150, temperature=0.1):
+def call_complet(sel_model, l_info=None,  max_tokens=150, temperature=0.1):
+    if l_info is None:
+        l_info = []
     response = client.chat_completion(
         model=sel_model,
         messages=l_info,
@@ -108,13 +73,14 @@ def call_complet(sel_model, l_info=[],  max_tokens=150, temperature=0.1):
 # 4. STAGE 2: ROUTING & CLASSIFICATION - TO CHECK
 def get_master_taxonomy(original_text):
     try:
+       
         # --- 1. Query Group B (Hate Speech) ---
-        res_b = retry_call(lambda: call_classif(original_text, MODEL_GROUP_B))
+        res_b = retry_call(lambda: call_classif(original_text, model.GROUP_B))
         score_b = res_b.score
         label_b = res_b.label # Usually 'hate' or 'nothate'
         
         # --- 2. Query Group A (Sentiment) ---
-        res_a = retry_call(lambda: call_classif(original_text, MODEL_GROUP_A))
+        res_a = retry_call(lambda: call_classif(original_text, model.GROUP_A))
         score_a = res_a.score
         label_a = res_a.label # Usually 'positive', 'neutral', 'negative'
 
@@ -128,7 +94,7 @@ def get_master_taxonomy(original_text):
           "taxonomy_classification": "CATEGORY",
           "confidence_reasoning": "Brief reason why"
         }}"""
-        res_text_c = retry_call(lambda: call_complet(MODEL_GROUP_C, [{"role": "user", "content": prompt_c}]))
+        res_text_c = retry_call(lambda: call_complet(model.GROUP_C, [{"role": "user", "content": prompt_c}]))
         data_c = safe_json_load(res_text_c)
         label_c = data_c.get("taxonomy_classification", "NEUTRAL")
 
@@ -175,7 +141,7 @@ def get_master_taxonomy(original_text):
 # 5. MAIN BATCH PROCESSOR
 def process_entry(text):
     print("Stage 1: Extraction of entities and relationships...")
-    s1_res = retry_call(lambda: call_complet(MODEL_EXTR, [{"role": "system", "content": EXTR_PROMPT},{"role": "user", "content": text}], max_tokens=1000))
+    s1_res = retry_call(lambda: call_complet(model.EXTR, [{"role": "system", "content": prompt.EXTR},{"role": "user", "content": text}], max_tokens=1000))
     graph = safe_json_load(s1_res)
 
     print("Stage 2: Taxonomy Arbitration...")
