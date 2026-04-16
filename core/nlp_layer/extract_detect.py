@@ -141,7 +141,7 @@ def get_master_taxonomy(original_text):
 # 5. MAIN BATCH PROCESSOR
 def process_entry(text):
     print("Stage 1: Extraction of entities and relationships...")
-    s1_res = retry_call(lambda: call_complet(model.EXTR, [{"role": "system", "content": prompt.EXTR},{"role": "user", "content": text}], max_tokens=1000))
+    s1_res = retry_call(lambda: call_complet(model.EXTR_ENT_REL, [{"role": "system", "content": prompt.EXTR_ENT_REL},{"role": "user", "content": text}], max_tokens=1000))
     graph = safe_json_load(s1_res)
 
     print("Stage 2: Taxonomy Arbitration...")

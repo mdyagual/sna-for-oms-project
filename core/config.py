@@ -12,7 +12,7 @@ class Token:
 class LLMConfig:   
 
     ## Extractor model
-    EXTR: str = "meta-llama/Llama-3.1-8B-Instruct"
+    EXTR_ENT_REL: str = "meta-llama/Llama-3.1-8B-Instruct"
 
     ## DETECTION TAXONOMY
     # Sentimental and Emotional
@@ -24,7 +24,7 @@ class LLMConfig:
 
 @dataclass
 class Prompt:
-    EXTR = """
+    EXTR_ENT_REL = """
     You are an expert Intelligence Analyst specialized in Social Network Analysis (SNA).
     Your task is to extract a base graph (Entities and Relationships) from the text.
 
