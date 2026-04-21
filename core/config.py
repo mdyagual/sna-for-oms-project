@@ -44,6 +44,8 @@ class Prompt:
   DO NOT invent new labels.
     - Always extract relationships when there is meaningful interaction or implied action.
     - The 'predicate' must be a specific, normalized present-tense verb (e.g., "instructs", "relocates", "threatens").
+    - Connect people to objects and locations using normalized present-tense verbs (e.g., {"subject": "Miller", "predicate": "possesses", "object": "shank"}).
+    CRITICAL: Every entity you extract MUST be involved in at least one relationship. Do not leave "floating" entities.
 
     CRITICAL: OUTPUT ONLY VALID JSON. START DIRECTLY WITH {:
     {
