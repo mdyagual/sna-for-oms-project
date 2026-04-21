@@ -29,7 +29,8 @@ class Prompt:
     Your task is to extract a base graph (Entities and Relationships) from the text.
 
     RULES:
-    - Extract ONLY socially relevant entities (Person, Group, Institution, Location, Target).
+    - Extract ONLY socially relevant entities (Person, Group, Instruction, Location, Target).
+    - Ensure entity names are capitalized and stripped of titles (e.g., use 'Ana' instead of 'Miss Ana')
     - EXCLUDE the reporting officer or system administrator from the extracted network. Focus only on the relationships between the subjects of the report (e.g., inmates, visitors, external contacts)
     - Resolve pronouns to their actual entity names based on the context. (DO NOT use generic terms like "Author").
     - Extract relationships ONLY if there is meaningful interaction or implied action.
