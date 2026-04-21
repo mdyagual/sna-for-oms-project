@@ -8,6 +8,12 @@ load_dotenv(override=True)
 class Token:
     HF_TOKEN: str = os.getenv("HF_TOKEN","")
 
+@dataclass
+class Neo4J:
+    USER: str = os.getenv("NEO4J_USER","")
+    PASS: str = os.getenv("NEO4J_PASS","")
+    URL: str = os.getenv("NEO4J_URL","")
+
 @dataclass(frozen=True)
 class LLMConfig:   
 
@@ -51,5 +57,6 @@ class Prompt:
     
 
 token = Token()
+graph_base = Neo4J()
 model = LLMConfig()
 prompt = Prompt()
