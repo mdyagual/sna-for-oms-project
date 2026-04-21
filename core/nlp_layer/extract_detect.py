@@ -47,10 +47,10 @@ async def async_retry_call(fn, retries=5):
                 await asyncio.sleep(5) 
                 
             if i == retries - 1:
-                print("  [Failed] Maximum retries reached.")
+                logger.error("[Failed] Maximum retries reached.")
                 raise e
         except Exception as e:
-            print(f"  [Network Error] {str(e)[:50]}... Retrying...")
+            logger.warning("[Network Error] %s... Retrying...", (str(e)[:50]))
             await asyncio.sleep(5)
             if i == retries - 1:
                 raise e
@@ -80,8 +80,9 @@ async def get_master_taxonomy(original_text):
         
         OUTPUT ONLY VALID JSON:
         {{
-          "taxonomy_classification": "CATEGORY",
-          "confidence_reasoning": "Brief reason why"
+        "taxonomy_classification": "CATEGORY",
+        "confidence_score": 0.85,
+        "confidence_reasoning": "Brief reason why"
         }}"""
     
     try:
@@ -101,15 +102,19 @@ async def get_master_taxonomy(original_text):
         data_c = safe_json_load(res_text_c)       
         label_c = data_c.get("taxonomy_classification", "NEUTRAL")
 
+        try:
+            score_c = float(data_c.get("confidence_score", 0.0))
+        except (ValueError, TypeError):
+            score_c = 0.0
         # ==========================================
         # THE ARBITRATOR HIERARCHY (Highest to Lowest)
         # ==========================================
         
         # TIER 1: Critical Threats (Llama C output)
-        if label_c in ["EXTREMIST", "RADICALISM", "THREAT", "VIOLATED-SCALED"]:
+        if label_c in ["EXTREMIST", "RADICALISM", "THREAT", "VIOLATED-SCALED"] and score_c >= 0.70:
             return {
                 "taxonomy_category": label_c,
-                "reason": data_c.get("confidence_reasoning", "Detected by Group C")
+                "reason": f"Group C detected {label_c} with {round(score_b*100, 1)}% confidence" #data_c.get("confidence_score", "Detected by Group C")
             }
             
         # TIER 2: Hate Speech (RoBERTa B output)
