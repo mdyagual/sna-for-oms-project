@@ -1,9 +1,10 @@
 from neo4j import AsyncGraphDatabase
 import logging
 
+logger = logging.getLogger(__name__)
+
 class AsyncKnowledgeGraphManager:
     def __init__(self, uri, user, password):
-        # Initialize the ASYNC driver
         self.driver = AsyncGraphDatabase.driver(uri, auth=(user, password))
 
     async def close(self):
@@ -25,7 +26,7 @@ class AsyncKnowledgeGraphManager:
                 query = f"MERGE (n:{label} {{name: $name}})"
                 # Await the execution of the query
                 await session.run(query, name=name)
-                logging.info(f"Upserted Node: ({label}) {name}")
+                logger.info("Upserted Node: (%s) %s", label, name)
 
             # 2. Upsert Relationships
             for rel in relations:
@@ -42,4 +43,28 @@ class AsyncKnowledgeGraphManager:
                 """
                 # Await the execution of the query
                 await session.run(query, subj=subj, obj=obj, log_id=log_id, category=category)
-                logging.info(f"Upserted Edge: {subj} -[{predicate}]-> {obj}")
+                logger.info("Upserted Edge: %s - [ %s ] -> %s", subj, predicate, obj)
+
+    async def calculate_sna_metrics(self):
+        """
+        Calculates basic SNA metrics and saves them as properties on the Inmate nodes. (TO be improved*)
+        """
+        async with self.driver.session() as session:
+            # 1. Degree Centrality (Who is the most active?)
+            # Calculates how many edges connect to each Inmate and saves it as 'degree_score'
+            degree_query = """
+            MATCH (i:Inmate)-[r]-()
+            WITH i, count(r) AS degree
+            SET i.degree_score = degree
+            """
+            await session.run(degree_query)
+            
+            # 2. In-Degree Centrality (Who is being targeted/talked about the most?)
+            in_degree_query = """
+            MATCH ()-[r]->(i:Inmate)
+            WITH i, count(r) AS in_degree
+            SET i.in_degree_score = in_degree
+            """
+            await session.run(in_degree_query)
+            
+            logger.info("SNA Metrics updated successfully.")            
