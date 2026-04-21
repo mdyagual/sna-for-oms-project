@@ -30,11 +30,14 @@ class Prompt:
 
     RULES:
     - Extract ONLY socially relevant entities (Person, Group, Instruction, Location, Target).
-    - Ensure entity names are capitalized and stripped of titles (e.g., use 'Ana' instead of 'Miss Ana')
+    - Ensure entity are capitalized and stripped of titles or adjectives (e.g., use 'Miller' instead of 'Inmate Miller')
     - EXCLUDE the reporting officer or system administrator from the extracted network. Focus only on the relationships between the subjects of the report (e.g., inmates, visitors, external contacts)
     - Resolve pronouns to their actual entity names based on the context. (DO NOT use generic terms like "Author").
-    - Extract relationships ONLY if there is meaningful interaction or implied action.
-    - The 'predicate' must be a specific, normalized verb (e.g., "instructs", "relocates", "threatens").
+    - The entity 'label' MUST be exactly one of the following, strictly capitalized: 
+  [Inmate, Staff, ExternalContact, Group, Contraband, Weapon, Currency, InternalLocation, ExternalLocation, Event, DigitalAsset]. 
+  DO NOT invent new labels.
+    - Always extract relationships when there is meaningful interaction or implied action.
+    - The 'predicate' must be a specific, normalized present-tense verb (e.g., "instructs", "relocates", "threatens").
 
     CRITICAL: OUTPUT ONLY VALID JSON. START DIRECTLY WITH {:
     {
