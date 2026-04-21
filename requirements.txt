@@ -6,3 +6,4 @@ pandas
 pydantic
 uvicorn
 fastapi
+neo4j
