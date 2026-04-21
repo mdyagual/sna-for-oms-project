@@ -1,12 +1,17 @@
 import logging
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from core.nlp_layer.extract_detect import process_entry
 from core.schemas import LogRequest, LogResponse
+from core.kg_sna_layer.graph_builder import AsyncKnowledgeGraphManager
+from core.config import graph_base
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+kg_manager = AsyncKnowledgeGraphManager(graph_base.URL, graph_base.USER, graph_base.PASS)
 
 app = FastAPI(
     title="SNA for OMS - API",
@@ -21,6 +26,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Everything before the 'yield' happens on Server Startup
+    logger.info("Connecting to Neo4j Database...")
+    yield
+    # Everything after the 'yield' happens on Server Shutdown
+    logger.info("Closing Neo4j Database connection...")
+    await kg_manager.close()
 
 @app.get("/", include_in_schema=False)
 async def load_swagger():
@@ -42,6 +56,9 @@ async def extract_knowledge_graph(request: LogRequest):
         result = await process_entry(request.text)
         parsed_result = LogResponse(**result)
         logger.info("Successfully processed entry with ID: %s", (parsed_result.id))
+
+        await kg_manager.ingest_log_data(parsed_result.model_dump())
+
         return parsed_result
         
     except ValueError as e:
