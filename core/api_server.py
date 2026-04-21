@@ -5,11 +5,8 @@ from fastapi.responses import RedirectResponse
 from core.nlp_layer.extract_detect import process_entry
 from core.schemas import LogRequest, LogResponse
 
-
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
 
 app = FastAPI(
     title="SNA for OMS - API",
@@ -48,7 +45,7 @@ async def extract_knowledge_graph(request: LogRequest):
         return parsed_result
         
     except ValueError as e:
-        logger.warning("Validation error: %s", (str(e)))
+        logger.error("Validation error: %s", (str(e)))
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Processing error: {str(e)}"
