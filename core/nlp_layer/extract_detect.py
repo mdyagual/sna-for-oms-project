@@ -112,7 +112,7 @@ async def get_master_taxonomy(original_text):
         # ==========================================
         
         # TIER 1: Critical Threats (Llama C output)
-        if label_c in [{Taxonomy.EXTREMIST.name}, {Taxonomy.RADICALISM.name}, {Taxonomy.THREAT.name}, {Taxonomy.VIOLATED_SCALED.name}] and score_c >= 0.70:
+        if label_c in [Taxonomy.EXTREMIST.name, Taxonomy.RADICALISM.name, Taxonomy.THREAT.name, Taxonomy.VIOLATED_SCALED.name] and score_c >= 0.70:
             return {
                 "taxonomy_category": label_c,
                 "reason": f"Group C detected {label_c} with {round(score_c*100, 1)}% confidence.",
@@ -123,7 +123,7 @@ async def get_master_taxonomy(original_text):
         # Only accept if the model is highly confident it IS hate (> 75%)
         if label_b == "hate" and score_b > 0.75:
             return {
-                "taxonomy_category": {Taxonomy.HATE.name},
+                "taxonomy_category": Taxonomy.HATE.name,
                 "reason": f"Group B detected hate with {round(score_b*100, 1)}% confidence.",
                 "confidence_score": score_b 
             }
@@ -131,20 +131,20 @@ async def get_master_taxonomy(original_text):
         # TIER 3: Emotional/Sentimental (RoBERTa A output)
         if label_a == "negative" and score_a > 0.60:
             return {
-                "taxonomy_category": {Taxonomy.EMOTIONAL.name},
+                "taxonomy_category": Taxonomy.EMOTIONAL.name,
                 "reason": f"Group A detected negative emotion with {round(score_a*100, 1)}% confidence.",
                 "confidence_score": score_a 
             }
         elif label_a in ["positive", "neutral"]:
             return {
-                "taxonomy_category": {Taxonomy.SENTIMENTAL.name},
+                "taxonomy_category": Taxonomy.SENTIMENTAL.name,
                 "reason": f"Group A detected {label_a} sentiment with {round(score_a*100, 1)}% confidence.",
                 "confidence_score": score_a 
             }
             
         # Fallback
         return {
-            "taxonomy_category": {Taxonomy.SENTIMENTAL.name},
+            "taxonomy_category": Taxonomy.SENTIMENTAL.name,
             "reason": "Fallback: Did not trigger higher threat thresholds.",
             "confidence_score": -1 
         }
