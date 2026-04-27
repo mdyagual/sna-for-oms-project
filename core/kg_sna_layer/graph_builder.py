@@ -56,7 +56,7 @@ class AsyncKnowledgeGraphManager:
                                   obj=obj, 
                                   log_id=log_id, 
                                   category=category,
-                                  connfidence = confidence,
+                                  confidence = confidence,
                                   risk_weight = risk_weight)
                 logger.info("Upserted Edge: %s - [ %s ] -> %s (Risk Weight: %.2f)", subj, predicate, obj, risk_weight)
 
