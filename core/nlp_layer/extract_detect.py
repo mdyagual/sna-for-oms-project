@@ -6,6 +6,7 @@ import logging
 from huggingface_hub import AsyncInferenceClient
 from huggingface_hub.utils import HfHubHTTPError
 from core.config import token, model, prompt
+from core.schemas import Taxonomy
 
 logger = logging.getLogger(__name__)
 client = AsyncInferenceClient(token=token.HF_TOKEN)
@@ -76,14 +77,14 @@ async def call_complet(sel_model, l_info=None,  max_tokens=150, temperature=0.1)
 async def get_master_taxonomy(original_text):
     prompt_c = f"""Analyze the following text: '{original_text}'. 
         Classify it strictly into EXACTLY ONE of these categories: 
-        EXTREMIST, RADICALISM, THREAT, VIOLATED-SCALED, or NEUTRAL.
+        {Taxonomy.EXTREMIST.name}, {Taxonomy.RADICALISM.name}, {Taxonomy.THREAT.name}, {Taxonomy.VIOLATED_SCALED.name}, or {Taxonomy.NEUTRAL.name}.
         
         OUTPUT ONLY VALID JSON:
         {{
         "taxonomy_classification": "CATEGORY",
         "confidence_score": 0.85,
         "confidence_reasoning": "Brief reason why"
-        }}"""
+        }}""" 
     
     try:
         res_b, res_a, res_text_c = await asyncio.gather(
@@ -100,7 +101,7 @@ async def get_master_taxonomy(original_text):
         label_a = res_a.label 
 
         data_c = safe_json_load(res_text_c)       
-        label_c = data_c.get("taxonomy_classification", "NEUTRAL")
+        label_c = data_c.get("taxonomy_classification", Taxonomy.NEUTRAL.name)
 
         try:
             score_c = float(data_c.get("confidence_score", 0.0))
@@ -111,36 +112,41 @@ async def get_master_taxonomy(original_text):
         # ==========================================
         
         # TIER 1: Critical Threats (Llama C output)
-        if label_c in ["EXTREMIST", "RADICALISM", "THREAT", "VIOLATED-SCALED"] and score_c >= 0.70:
+        if label_c in [{Taxonomy.EXTREMIST.name}, {Taxonomy.RADICALISM.name}, {Taxonomy.THREAT.name}, {Taxonomy.VIOLATED_SCALED.name}] and score_c >= 0.70:
             return {
                 "taxonomy_category": label_c,
-                "reason": f"Group C detected {label_c} with {round(score_b*100, 1)}% confidence" #data_c.get("confidence_score", "Detected by Group C")
+                "reason": f"Group C detected {label_c} with {round(score_c*100, 1)}% confidence.",
+                "confidence_score": score_c 
             }
             
         # TIER 2: Hate Speech (RoBERTa B output)
         # Only accept if the model is highly confident it IS hate (> 75%)
         if label_b == "hate" and score_b > 0.75:
             return {
-                "taxonomy_category": "HATE",
-                "reason": f"Group B detected hate with {round(score_b*100, 1)}% confidence"
+                "taxonomy_category": {Taxonomy.HATE.name},
+                "reason": f"Group B detected hate with {round(score_b*100, 1)}% confidence.",
+                "confidence_score": score_b 
             }
             
         # TIER 3: Emotional/Sentimental (RoBERTa A output)
         if label_a == "negative" and score_a > 0.60:
             return {
-                "taxonomy_category": "EMOTIONAL",
-                "reason": f"Group A detected negative emotion with {round(score_a*100, 1)}% confidence"
+                "taxonomy_category": {Taxonomy.EMOTIONAL.name},
+                "reason": f"Group A detected negative emotion with {round(score_a*100, 1)}% confidence.",
+                "confidence_score": score_a 
             }
         elif label_a in ["positive", "neutral"]:
             return {
-                "taxonomy_category": "SENTIMENTAL",
-                "reason": f"Group A detected {label_a} sentiment with {round(score_a*100, 1)}% confidence"
+                "taxonomy_category": {Taxonomy.SENTIMENTAL.name},
+                "reason": f"Group A detected {label_a} sentiment with {round(score_a*100, 1)}% confidence.",
+                "confidence_score": score_a 
             }
             
         # Fallback
         return {
-            "taxonomy_category": "SENTIMENTAL",
-            "reason": "Fallback: Did not trigger higher threat thresholds."
+            "taxonomy_category": {Taxonomy.SENTIMENTAL.name},
+            "reason": "Fallback: Did not trigger higher threat thresholds.",
+            "confidence_score": -1 
         }
 
     except Exception as e:
@@ -164,6 +170,7 @@ async def process_entry(text):
         "log_text": text,
         "taxonomy_category": taxonomy_result.get("taxonomy_category", "ERROR"),
         "reasoning": taxonomy_result.get("reason", ""),
+        "confidence": taxonomy_result.get("confidence_score", -1),
         "entities": entities_list,
         "relations": relations_list
 
