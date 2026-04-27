@@ -1,6 +1,6 @@
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, status, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from core.nlp_layer.extract_detect import process_entry
@@ -72,6 +72,24 @@ async def extract_knowledge_graph(request: LogRequest):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred during processing"
+        ) from e
+    
+@app.post("/api/v1/sna-metrics", summary="Recalculate Network Math")
+async def update_graph_metrics(background_tasks: BackgroundTasks):
+    try:
+        # We call the function explicitly when this endpoint is hit!
+        background_tasks.add_task(kg_manager.calculate_sna_metrics)
+        
+        return {
+            "status": "success", 
+            "message": "SNA metrics (Structural and Relational) updated successfully in Neo4j."
+        }
+        
+    except Exception as e:
+        logger.error("Unexpected error: %s", (str(e)), exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
         ) from e
     
 @app.get("/health", status_code=status.HTTP_200_OK)
