@@ -1,6 +1,8 @@
 from neo4j import AsyncGraphDatabase
 import logging
 
+from core.schemas import Taxonomy
+
 logger = logging.getLogger(__name__)
 
 class AsyncKnowledgeGraphManager:
@@ -15,6 +17,10 @@ class AsyncKnowledgeGraphManager:
         category = processed_json.get("taxonomy_category", "UNKNOWN")
         entities = processed_json.get("entities", [])
         relations = processed_json.get("relations", [])
+        confidence = processed_json.get("confidence", 1)
+
+        base_severity = Taxonomy[category].value
+        risk_weight = base_severity * confidence
 
         # Open an async session
         async with self.driver.session() as session:
@@ -39,11 +45,19 @@ class AsyncKnowledgeGraphManager:
                 MATCH (target {{name: $obj}})
                 MERGE (source)-[r:{predicate}]->(target)
                 SET r.log_id = $log_id,
-                    r.taxonomy = $category
+                    r.taxonomy = $category,
+                    r.confidence_score = $confidence,
+                    r.risk_weight = $risk_weight 
                 """
                 # Await the execution of the query
-                await session.run(query, subj=subj, obj=obj, log_id=log_id, category=category)
-                logger.info("Upserted Edge: %s - [ %s ] -> %s", subj, predicate, obj)
+                await session.run(query, 
+                                  subj=subj, 
+                                  obj=obj, 
+                                  log_id=log_id, 
+                                  category=category,
+                                  connfidence = confidence,
+                                  risk_weight = risk_weight)
+                logger.info("Upserted Edge: %s - [ %s ] -> %s (Risk Weight: %.2f)", subj, predicate, obj, risk_weight)
 
     async def calculate_sna_metrics(self):
         """
