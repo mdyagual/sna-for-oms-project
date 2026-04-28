@@ -1,6 +1,7 @@
 from neo4j import AsyncGraphDatabase
 import logging
 import networkx as nx
+import networkx.algorithms.community as nx_comm
 
 from core.schemas import Taxonomy
 
@@ -109,9 +110,11 @@ class AsyncKnowledgeGraphManager:
             # If the graph is empty, stop here
             if not records:
                 return
+            
+
 
             # 2. Build the NetworkX Directed Graph
-            G = nx.DiGraph()
+            G = nx.Graph()
             for record in records:
                 G.add_edge(record["source"], record["target"], weight=record["weight"])
                 
@@ -125,8 +128,17 @@ class AsyncKnowledgeGraphManager:
             except nx.PowerIterationFailedConvergence:
                 eigenvector = {node: 0.0 for node in G.nodes()} # Fallback if graph is too small/disconnected
 
+            communities = nx_comm.louvain_communities(G, weight='weight')
+
+            # We need to map these sets into a dictionary so we can push it to Neo4j
+            # e.g., {"Viper": "Comm_0", "Runner": "Comm_0", "Miller": "Comm_1"}
+            community_map = {}
+            for comm_id, group in enumerate(communities):
+                for inmate in group:
+                    community_map[inmate] = f"Subgroup_{comm_id}"
+
             # Closeness: Who can spread information/contraband the fastest?
-            closeness = nx.closeness_centrality(G, distance='weight')
+            #closeness = nx.closeness_centrality(G, distance='weight')
 
             # 4. Push the Structural Metrics back into Neo4j
             for node_name in G.nodes():
@@ -134,16 +146,13 @@ class AsyncKnowledgeGraphManager:
                 MATCH (i:Inmate {name: $name})
                 SET i.betweenness = $betw,
                     i.eigenvector = $eigen,
-                    i.closeness = $close
+                    i.community_id = $comm_id
                 """
                 await session.run(update_query, 
-                                  name=node_name, 
-                                  betw=betweenness.get(node_name, 0.0),
-                                  eigen=eigenvector.get(node_name, 0.0),
-                                  close=closeness.get(node_name, 0.0))
-                
-            logger.info("Structural Metrics (Betweenness, Eigenvector, Closeness) updated.")
-
-        
+                                name=node_name, 
+                                betw=betweenness.get(node_name, 0.0),
+                                eigen=eigenvector.get(node_name, 0.0),
+                                comm_id=community_map.get(node_name, "Unknown"))                
+            logger.info("Structural Metrics (Betweenness, Eigenvector, Closeness) updated.")      
             
             logger.info("SNA Metrics updated successfully.")            
