@@ -8,7 +8,7 @@ load_dotenv(override=True)
 class Token:
     HF_TOKEN: str = os.getenv("HF_TOKEN","")
 
-@dataclass
+@dataclass(frozen=True)
 class Neo4J:
     USER: str = os.getenv("NEO4J_USER","")
     PASS: str = os.getenv("NEO4J_PASS","")
