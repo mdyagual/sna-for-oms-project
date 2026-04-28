@@ -51,6 +51,9 @@ def fetch_graph_from_neo4j(uri, user, password):
             raise ValueError("No nodes found in Neo4j! Make sure your graph is populated.")
             
         node_mapping = {node['name']: idx for idx, node in enumerate(nodes)}
+
+        #Create a reverse mapping so we remember who is who!
+        reverse_mapping = {idx: node['name'] for idx, node in enumerate(nodes)}
         
         # Handle potential None values if SNA metrics haven't been calculated properly
         x_enriched = torch.tensor([[n['deg'] or 0.0, n['betw'] or 0.0, n['eigen'] or 0.0] for n in nodes], dtype=torch.float)
@@ -82,7 +85,7 @@ def fetch_graph_from_neo4j(uri, user, password):
         data_enriched = Data(x=x_enriched, edge_index=edge_index, edge_attr=edge_weight_enriched, y=y)
         data_baseline = Data(x=x_baseline, edge_index=edge_index, edge_attr=edge_weight_baseline, y=y)
         
-        return data_baseline, data_enriched
+        return data_baseline, data_enriched, reverse_mapping
 
 # ==========================================
 # 3. TRAINING AND EVALUATION
@@ -122,3 +125,39 @@ def evaluate_model(model, data):
         recall = recall_score(y_true, preds_binary, zero_division=0)
         
         return auc, recall, y_true, preds_probs
+    
+# ==========================================
+# 4. ACTIONABLE INTELLIGENCE (INFERENCE)
+# ==========================================
+def generate_threat_report(model, data, reverse_mapping, threshold=0.70):
+    """
+    Translates raw PyTorch tensor predictions back into human-readable alerts.
+    """
+    model.eval()
+    with torch.no_grad():
+        # Get the raw probability scores (0.0 to 1.0)
+        predictions = model(data.x, data.edge_index, data.edge_attr).numpy()
+        
+    alerts = []
+    # Loop through every edge in the network
+    for i in range(len(predictions)):
+        prob = predictions[i][0]
+        
+        # If the GNN thinks this edge is dangerous...
+        if prob >= threshold:
+            src_id = data.edge_index[0][i].item()
+            tgt_id = data.edge_index[1][i].item()
+            
+            # Translate IDs back to names
+            src_name = reverse_mapping[src_id]
+            tgt_name = reverse_mapping[tgt_id]
+            
+            alerts.append({
+                "source": src_name,
+                "target": tgt_name,
+                "probability": prob * 100
+            })
+            
+    # Sort alerts by highest risk first
+    alerts = sorted(alerts, key=lambda x: x['probability'], reverse=True)
+    return alerts
