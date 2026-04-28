@@ -8,3 +8,10 @@ uvicorn
 fastapi
 neo4j
 networkx
+numpy
+scikit-learn
+matplotlib
+torch
+torchvision
+torchaudio
+torch_geometric
