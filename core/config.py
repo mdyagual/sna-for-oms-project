@@ -62,3 +62,5 @@ token = Token()
 graph_base = Neo4J()
 model = LLMConfig()
 prompt = Prompt()
+
+FILE_TEST = "./data/data_for_test.txt"
