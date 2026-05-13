@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, status, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
-from core.nlp_layer.extract_detect import process_entry
+from core.nlp_layer.extract_detect import process_entry, process_entry_file
 from core.schemas import LogRequest, LogResponse
 from core.kg_sna_layer.graph_builder import AsyncKnowledgeGraphManager
 from core.config import graph_base
@@ -40,7 +40,35 @@ async def lifespan(app: FastAPI):
 async def load_swagger():
     return RedirectResponse(url="/docs")
 
-# Notice we added response_model=ResponseLog here!
+@app.get("/api/v1/test-project",
+        summary="Testing the whole architecture: Extract entities, relationships and taxonomy from Text",
+        responses={
+            422: {"description": "Validation error in parsing"},
+            500: {"description": "Internal server error during processing"}
+            
+        })
+async def test_data_model():
+    try:
+        logger.info("Processing text from file...")
+        result = await process_entry_file()
+        logger.info("Successfully processed text from file...")
+        for r in result:
+            parsed_result = LogResponse(**r)
+            await kg_manager.ingest_log_data(parsed_result.model_dump())
+        logger.info("Successfully data ingestion~")
+    except ValueError as e:
+        logger.error("Validation error: %s", (str(e)))
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Processing error: {str(e)}"
+        ) from e
+    except Exception as e:
+        logger.error("Unexpected error: %s", (str(e)), exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred during processing"
+        ) from e
+
 @app.post("/api/v1/extract", 
         response_model=LogResponse, 
         status_code=status.HTTP_200_OK,
