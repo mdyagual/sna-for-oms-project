@@ -5,7 +5,7 @@ import logging
 
 from huggingface_hub import AsyncInferenceClient
 from huggingface_hub.utils import HfHubHTTPError
-from core.config import token, model, prompt
+from core.config import token, model, prompt, FILE_TEST
 from core.schemas import Taxonomy
 
 logger = logging.getLogger(__name__)
@@ -152,7 +152,7 @@ async def get_master_taxonomy(original_text):
     except Exception as e:
         return {"taxonomy_category": "ERROR", "reason": f"API Error: {str(e)}"}
 
-# 5. MAIN BATCH PROCESSOR
+# MAIN BATCH PROCESSOR
 async def process_entry(text):
     logger.info("Stage 1: Extraction of entities and relationships...")
     s1_res = await async_retry_call(lambda: call_complet(model.EXTR_ENT_REL, [{"role": "system", "content": prompt.EXTR_ENT_REL},{"role": "user", "content": text}], max_tokens=1000))
@@ -175,3 +175,36 @@ async def process_entry(text):
         "relations": relations_list
 
     }
+
+# TEST BATCH PROCESSOR
+async def process_entry_file(): 
+    f = open(FILE_TEST, 'r', encoding='utf-8')
+    lines = [line.strip() for line in f if line != '\n']
+    f.close()
+
+    d_processed = []
+    for i in range in len(lines):
+        text = lines[i]
+        logger.info("Stage 1: Extraction of entities and relationships from report #%d...", (i+1))
+        s1_res = await async_retry_call(lambda: call_complet(model.EXTR_ENT_REL, [{"role": "system", "content": prompt.EXTR_ENT_REL},{"role": "user", "content": text}], max_tokens=1000))
+        graph = safe_json_load(s1_res)
+
+        logger.info("Stage 2: Taxonomy Arbitration from report #%d...", (i+1))
+        taxonomy_result = await get_master_taxonomy(text)
+
+    # Safely extract the arrays from Llama's JSON, defaulting to empty lists if it failed
+        entities_list = graph.get("entities", [])
+        relations_list = graph.get("relations", [])
+
+    #TO-DO: Re-adjust this to make a single execution.
+        d_processed.append( {
+        
+            "log_text": text,
+            "taxonomy_category": taxonomy_result.get("taxonomy_category", "ERROR"),
+            "reasoning": taxonomy_result.get("reason", ""),
+            "confidence": taxonomy_result.get("confidence_score", -1),
+            "entities": entities_list,
+            "relations": relations_list
+
+        })
+    return d_processed
