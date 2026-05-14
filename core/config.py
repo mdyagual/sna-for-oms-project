@@ -57,10 +57,13 @@ class Prompt:
     ]
     }"""
     
+@dataclass(frozen=True)
+class Demo:
+    FILE_TEST = "./data/files/data_for_test.txt"
 
 token = Token()
 graph_base = Neo4J()
 model = LLMConfig()
 prompt = Prompt()
+demo = Demo()
 
-FILE_TEST = "./data/data_for_test.txt"
