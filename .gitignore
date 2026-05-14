@@ -215,3 +215,8 @@ neo4j_data/
 # Cache
 *.pyc
 .ipynb_checkpoints/
+
+# Other related stuff that I don't want to be uploaded
+gnn_ablation_study_results.png
+extract_detect_cache.json
+data_for_test.txt
