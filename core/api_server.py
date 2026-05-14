@@ -8,6 +8,7 @@ from core.schemas import LogRequest, LogResponse
 from core.kg_sna_layer.graph_builder import AsyncKnowledgeGraphManager
 from core.config import graph_base
 
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -51,10 +52,9 @@ async def test_data_model():
     try:
         logger.info("Processing text from file...")
         result = await process_entry_file()
-        logger.info("Successfully processed text from file...")
+        logger.info("Successfully processed text from file. Stored in caché to avoid re-calls to the LLMs.")
         for r in result:
-            parsed_result = LogResponse(**r)
-            await kg_manager.ingest_log_data(parsed_result.model_dump())
+            await kg_manager.ingest_log_data(r)
         logger.info("Successfully data ingestion~")
     except ValueError as e:
         logger.error("Validation error: %s", (str(e)))
