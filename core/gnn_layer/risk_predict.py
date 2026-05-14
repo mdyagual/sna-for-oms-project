@@ -60,7 +60,9 @@ def fetch_graph_from_neo4j(uri, user, password):
         x_baseline = torch.ones((len(nodes), 1), dtype=torch.float)
 
         # Fetch Edges and Taxonomy Weights
-        edge_query = "MATCH (a:Inmate)-[r]->(b:Inmate) RETURN a.name AS source, b.name AS target, r.risk_weight AS weight"
+        edge_query = """MATCH (a:Inmate)-[r]->(b:Inmate) 
+        WHERE type(r) <> 'SNA_TIE_STRENGTH'
+        RETURN a.name AS source, b.name AS target, r.risk_weight AS weight"""
         edges = session.run(edge_query).data()
         
         edge_index = []
@@ -75,6 +77,8 @@ def fetch_graph_from_neo4j(uri, user, password):
                 edge_index.append([src, tgt])
                 weight = float(e['weight']) if e['weight'] is not None else 1.0
                 edge_weight_enriched.append([weight])
+
+                # CHANGE THIS LINE: Lower the threshold from 4.0 to 2.5
                 labels.append([1.0 if weight >= 4.0 else 0.0])
 
         edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous() 
