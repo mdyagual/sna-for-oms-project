@@ -59,6 +59,7 @@ six==1.17.0
 starlette==1.0.0
 sympy==1.14.0
 threadpoolctl==3.6.0
+tinydb==4.8.2
 tokenizers==0.22.2
 torch==2.11.0
 torch-geometric==2.7.0
