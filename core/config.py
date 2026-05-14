@@ -60,6 +60,7 @@ class Prompt:
 @dataclass(frozen=True)
 class Demo:
     FILE_TEST = "./data/files/data_for_test.txt"
+    DB_CACHE = "./data/extract_detect_cache.json"
 
 token = Token()
 graph_base = Neo4J()
