@@ -40,14 +40,12 @@ class AsyncKnowledgeGraphManager:
             for rel in relations:
                 subj = str(rel.get("subject"))
                 obj = str(rel.get("object"))
-                predicate = str(rel.get("predicate", "RELATES_TO")).upper().replace(" ", "_")
-
+                predicate = str(rel.get("predicate", "RELATES_TO")).upper().replace(" ", "_").replace("-", "_")
                 query = f"""
                 MATCH (source {{name: $subj}})
                 MATCH (target {{name: $obj}})
-                MERGE (source)-[r:{predicate}]->(target)
-                SET r.log_id = $log_id,
-                    r.taxonomy = $category,
+                MERGE (source)-[r:`{predicate}` {{log_id: $log_id}}]->(target)
+                SET r.taxonomy = $category,
                     r.confidence_score = $confidence,
                     r.risk_weight = $risk_weight 
                 """
@@ -76,6 +74,7 @@ class AsyncKnowledgeGraphManager:
             # We calculate this by summing the risk_weights of all their interactions.
             strength_query = """
             MATCH (a:Inmate)-[r]->(b:Inmate)
+            WHERE type(r) <> 'SNA_TIE_STRENGTH'
             WITH a, b, sum(r.risk_weight) AS total_strength, count(r) AS interaction_count
             // We create a hidden 'meta-edge' just to store the relationship strength
             MERGE (a)-[meta:SNA_TIE_STRENGTH]->(b)
@@ -88,6 +87,7 @@ class AsyncKnowledgeGraphManager:
             # If an inmate has many high-risk arrows pointing AT them, their reputation score rises.
             reputation_query = """
             MATCH ()-[r]->(i:Inmate)
+            WHERE type(r) <> 'SNA_TIE_STRENGTH'
             WITH i, sum(r.risk_weight) AS incoming_danger
             SET i.reputation_score = incoming_danger
             """
