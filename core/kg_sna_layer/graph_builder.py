@@ -4,6 +4,7 @@ import networkx as nx
 import networkx.algorithms.community as nx_comm
 
 from core.schemas import Taxonomy
+from core.schemas import PredicateOntology
 
 logger = logging.getLogger(__name__)
 
@@ -15,13 +16,20 @@ class AsyncKnowledgeGraphManager:
         await self.driver.close()
 
     async def ingest_log_data(self, processed_json: dict):
-        log_id = processed_json.get("id", "UNKNOWN") # Using your Pydantic generated ID
-        category = processed_json.get("taxonomy_category", "UNKNOWN")
+        log_id = processed_json.get("id", "UNKNOWN")
+        category = processed_json.get("taxonomy_category", Taxonomy.NEUTRAL.value)
         entities = processed_json.get("entities", [])
         relations = processed_json.get("relations", [])
         confidence = processed_json.get("confidence", 1)
 
-        base_severity = Taxonomy[category].value
+        try:
+            base_severity = Taxonomy(category).severity
+        except ValueError:
+            logger.warning("Invalid taxonomy category '%s'. Defaulting to NEUTRAL.", category)
+            category = "NEUTRAL"
+            base_severity = Taxonomy.NEUTRAL.severity
+
+
         risk_weight = base_severity * confidence
 
         # Open an async session
@@ -40,7 +48,8 @@ class AsyncKnowledgeGraphManager:
             for rel in relations:
                 subj = str(rel.get("subject"))
                 obj = str(rel.get("object"))
-                predicate = str(rel.get("predicate", "RELATES_TO")).upper().replace(" ", "_").replace("-", "_")
+                predicate = str(rel.get("predicate", PredicateOntology.ASSOCIATED_WITH.value)).upper().replace(" ", "_").replace("-", "_")
+
                 query = f"""
                 MATCH (source {{name: $subj}})
                 MATCH (target {{name: $obj}})
@@ -155,4 +164,22 @@ class AsyncKnowledgeGraphManager:
                                 comm_id=community_map.get(node_name, "Unknown"))                
             logger.info("Structural Metrics (Betweenness, Eigenvector, Closeness) updated.")      
             
-            logger.info("SNA Metrics updated successfully.")            
+            logger.info("SNA Metrics updated successfully.")
+
+    async def wipe_sna_metrics(self):
+        # Connect to your Neo4j instance
+        
+        async with self.driver.session() as session:
+            # 1. Delete the calculated meta-edges
+            session.run("MATCH ()-[r:SNA_TIE_STRENGTH]->() DELETE r")
+            print("✅ Deleted SNA_TIE_STRENGTH edges.")
+            
+            # 2. Remove the mathematical properties from the nodes
+            session.run("""
+                MATCH (n:Inmate) 
+                REMOVE n.betweenness, n.eigenvector, n.reputation_score, n.community_id
+            """)
+            print("✅ Removed structural metrics (betweenness, eigenvector, etc.) from nodes.")
+            
+    
+        print("🧹 Graph successfully reset to its pure semantic state!")            
