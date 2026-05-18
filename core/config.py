@@ -9,6 +9,12 @@ class Token:
     HF_TOKEN: str = os.getenv("HF_TOKEN","")
 
 @dataclass(frozen=True)
+class Neo4J:
+    USER: str = os.getenv("NEO4J_USER","")
+    PASS: str = os.getenv("NEO4J_PASS","")
+    URL: str = os.getenv("NEO4J_URL","")
+
+@dataclass(frozen=True)
 class LLMConfig:   
 
     ## Extractor model
@@ -85,8 +91,14 @@ class Prompt:
     ]
     }"""
     
-    
+@dataclass(frozen=True)
+class Demo:
+    FILE_TEST = "./data/files/data_for_test.txt"
+    DB_CACHE = "./data/extract_detect_cache.json"
+
 
 token = Token()
+graph_base = Neo4J()
 model = LLMConfig()
 prompt = Prompt()
+demo = Demo()
