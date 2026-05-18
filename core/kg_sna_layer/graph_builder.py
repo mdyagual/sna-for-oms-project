@@ -4,6 +4,7 @@ import networkx as nx
 import networkx.algorithms.community as nx_comm
 
 from core.schemas import Taxonomy
+from core.schemas import PredicateOntology
 
 logger = logging.getLogger(__name__)
 
@@ -15,13 +16,20 @@ class AsyncKnowledgeGraphManager:
         await self.driver.close()
 
     async def ingest_log_data(self, processed_json: dict):
-        log_id = processed_json.get("id", "UNKNOWN") # Using your Pydantic generated ID
-        category = processed_json.get("taxonomy_category", "UNKNOWN")
+        log_id = processed_json.get("id", "UNKNOWN")
+        category = processed_json.get("taxonomy_category", Taxonomy.NEUTRAL.value)
         entities = processed_json.get("entities", [])
         relations = processed_json.get("relations", [])
         confidence = processed_json.get("confidence", 1)
 
-        base_severity = Taxonomy[category].value
+        try:
+            base_severity = Taxonomy(category).severity
+        except ValueError:
+            logger.warning("Invalid taxonomy category '%s'. Defaulting to NEUTRAL.", category)
+            category = "NEUTRAL"
+            base_severity = Taxonomy.NEUTRAL.severity
+
+
         risk_weight = base_severity * confidence
 
         # Open an async session
@@ -40,14 +48,13 @@ class AsyncKnowledgeGraphManager:
             for rel in relations:
                 subj = str(rel.get("subject"))
                 obj = str(rel.get("object"))
-                predicate = str(rel.get("predicate", "RELATES_TO")).upper().replace(" ", "_")
+                predicate = str(rel.get("predicate", PredicateOntology.ASSOCIATED_WITH.value)).upper().replace(" ", "_").replace("-", "_")
 
                 query = f"""
                 MATCH (source {{name: $subj}})
                 MATCH (target {{name: $obj}})
-                MERGE (source)-[r:{predicate}]->(target)
-                SET r.log_id = $log_id,
-                    r.taxonomy = $category,
+                MERGE (source)-[r:`{predicate}` {{log_id: $log_id}}]->(target)
+                SET r.taxonomy = $category,
                     r.confidence_score = $confidence,
                     r.risk_weight = $risk_weight 
                 """
@@ -76,6 +83,7 @@ class AsyncKnowledgeGraphManager:
             # We calculate this by summing the risk_weights of all their interactions.
             strength_query = """
             MATCH (a:Inmate)-[r]->(b:Inmate)
+            WHERE type(r) <> 'SNA_TIE_STRENGTH'
             WITH a, b, sum(r.risk_weight) AS total_strength, count(r) AS interaction_count
             // We create a hidden 'meta-edge' just to store the relationship strength
             MERGE (a)-[meta:SNA_TIE_STRENGTH]->(b)
@@ -88,6 +96,7 @@ class AsyncKnowledgeGraphManager:
             # If an inmate has many high-risk arrows pointing AT them, their reputation score rises.
             reputation_query = """
             MATCH ()-[r]->(i:Inmate)
+            WHERE type(r) <> 'SNA_TIE_STRENGTH'
             WITH i, sum(r.risk_weight) AS incoming_danger
             SET i.reputation_score = incoming_danger
             """
@@ -155,4 +164,22 @@ class AsyncKnowledgeGraphManager:
                                 comm_id=community_map.get(node_name, "Unknown"))                
             logger.info("Structural Metrics (Betweenness, Eigenvector, Closeness) updated.")      
             
-            logger.info("SNA Metrics updated successfully.")            
+            logger.info("SNA Metrics updated successfully.")
+
+    async def wipe_sna_metrics(self):
+        # Connect to your Neo4j instance
+        
+        async with self.driver.session() as session:
+            # 1. Delete the calculated meta-edges
+            session.run("MATCH ()-[r:SNA_TIE_STRENGTH]->() DELETE r")
+            print("✅ Deleted SNA_TIE_STRENGTH edges.")
+            
+            # 2. Remove the mathematical properties from the nodes
+            session.run("""
+                MATCH (n:Inmate) 
+                REMOVE n.betweenness, n.eigenvector, n.reputation_score, n.community_id
+            """)
+            print("✅ Removed structural metrics (betweenness, eigenvector, etc.) from nodes.")
+            
+    
+        print("🧹 Graph successfully reset to its pure semantic state!")            
