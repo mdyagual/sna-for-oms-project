@@ -33,7 +33,7 @@ class RiskEscalationGNN(torch.nn.Module):
         edge_features = torch.cat([x[row], x[col]], dim=1)
         
         # 3. Predict the probability of escalation
-        return torch.sigmoid(self.classifier(edge_features))
+        return self.classifier(edge_features)
 
 # ==========================================
 # 2. DATA EXTRACTION
@@ -96,7 +96,19 @@ def fetch_graph_from_neo4j(uri, user, password):
 # ==========================================
 def train_model(model, data, epochs=100):
     optimizer = torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=5e-4)
-    criterion = torch.nn.BCELoss()
+    
+    # --- THE FIX: CALCULATE CLASS IMBALANCE WEIGHT ---
+    # Count how many positive (escalation) and negative edges exist
+    num_positives = data.y.sum().item()
+    num_negatives = len(data.y) - num_positives
+    
+    # Calculate ratio (e.g., if 980 negatives and 20 positives, weight is 49.0)
+    # Added a fallback to 1.0 just in case there are 0 positives in a test run
+    weight_val = num_negatives / num_positives if num_positives > 0 else 1.0
+    pos_weight = torch.tensor([weight_val])
+    
+    # Switch to BCEWithLogitsLoss and apply the weight
+    criterion = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
     
     model.train()
     for epoch in range(epochs):
@@ -111,25 +123,28 @@ def train_model(model, data, epochs=100):
             
     return model
 
-def evaluate_model(model, data):
+def evaluate_model(model, data, threshold=0.15):
     model.eval() 
     with torch.no_grad():
-        predictions = model(data.x, data.edge_index, data.edge_attr)
+        # 1. Get raw logits from the model
+        logits = model(data.x, data.edge_index, data.edge_attr)
         
-        preds_binary = (predictions >= 0.5).float().numpy()
+        # 2. Manually apply Sigmoid to get probabilities (0.0 to 1.0)
+        predictions = torch.sigmoid(logits)
+        
+        # 3. Use our new, highly-sensitive threshold
+        preds_binary = (predictions >= threshold).float().numpy()
         y_true = data.y.numpy()
         preds_probs = predictions.numpy()
         
-        # Handle edge cases where the graph is too small and only has 1 class
         try:
             auc = roc_auc_score(y_true, preds_probs)
         except ValueError:
-            auc = 0.5 # Default if it can't calculate AUC due to lack of diverse data
+            auc = 0.5 
             
         recall = recall_score(y_true, preds_binary, zero_division=0)
         
         return auc, recall, y_true, preds_probs
-    
 # ==========================================
 # 4. ACTIONABLE INTELLIGENCE (INFERENCE)
 # ==========================================
@@ -139,8 +154,9 @@ def generate_threat_report(model, data, reverse_mapping, threshold=0.70):
     """
     model.eval()
     with torch.no_grad():
-        # Get the raw probability scores (0.0 to 1.0)
-        predictions = model(data.x, data.edge_index, data.edge_attr).numpy()
+        # Get raw logits and apply sigmoid
+        logits = model(data.x, data.edge_index, data.edge_attr)
+        predictions = torch.sigmoid(logits).numpy() # <--- Added Sigmoid
         
     alerts = []
     # Loop through every edge in the network
