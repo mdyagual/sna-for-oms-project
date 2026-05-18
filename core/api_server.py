@@ -82,12 +82,11 @@ async def extract_knowledge_graph(request: LogRequest):
     try:
         logger.info("Processing text of length: %d" , (len(request.text)))
         result = await process_entry(request.text)
-        parsed_result = LogResponse(**result)
-        logger.info("Successfully processed entry with ID: %s", (parsed_result.id))
+        logger.info("Successfully processed entry with ID: %s", (result.id))
 
-        await kg_manager.ingest_log_data(parsed_result.model_dump())
+        await kg_manager.ingest_log_data(result)
 
-        return parsed_result
+        return result
         
     except ValueError as e:
         logger.error("Validation error: %s", (str(e)))
