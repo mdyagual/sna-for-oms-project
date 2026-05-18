@@ -167,16 +167,18 @@ async def process_entry(text):
     entities_list = graph.get("entities", [])
     relations_list = graph.get("relations", [])
 
-    return {
-      
-        "log_text": text,
-        "taxonomy_category": taxonomy_result.get("taxonomy_category", "ERROR"),
-        "reasoning": taxonomy_result.get("reason", ""),
-        "confidence": taxonomy_result.get("confidence_score", -1),
-        "entities": entities_list,
-        "relations": relations_list
+    r = {                
+                "log_text": text,
+                "taxonomy_category": taxonomy_result.get("taxonomy_category", "ERROR"),
+                "reasoning": taxonomy_result.get("reason", ""),
+                "confidence": taxonomy_result.get("confidence_score", -1),
+                "entities": entities_list,
+                "relations": relations_list
+                }
+            
+    parsed_result = LogResponse(**r).model_dump(mode='json')
 
-    }
+    return parsed_result
 
 # TEST BATCH PROCESSOR
 async def process_entry_file(): 
