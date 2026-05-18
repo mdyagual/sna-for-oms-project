@@ -217,6 +217,8 @@ neo4j_data/
 .ipynb_checkpoints/
 
 # Other related stuff that I don't want to be uploaded
-gnn_ablation_study_results.png
+ablation_curves_**.png
+confusion_matrix_enriched_**.png
+precision_recall_curve_**.png
 extract_detect_cache.json
 data_for_test.txt
