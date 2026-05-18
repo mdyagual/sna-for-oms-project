@@ -1,4 +1,4 @@
-from neo4j import AsyncGraphDatabase
+from neo4j import AsyncGraphDatabase, GraphDatabase
 import logging
 import networkx as nx
 import networkx.algorithms.community as nx_comm
@@ -70,7 +70,7 @@ class AsyncKnowledgeGraphManager:
 
     async def calculate_sna_metrics(self):
         """
-        Calculates basic SNA metrics and saves them as properties on the Inmate nodes. (TO be improved*)
+        Calculates basic SNA metrics and saves them as properties on the Inmate nodes.
         """
         async with self.driver.session() as session:
 
@@ -163,23 +163,25 @@ class AsyncKnowledgeGraphManager:
                                 eigen=eigenvector.get(node_name, 0.0),
                                 comm_id=community_map.get(node_name, "Unknown"))                
             logger.info("Structural Metrics (Betweenness, Eigenvector, Closeness) updated.")      
-            
+            print("✅ Structural Metrics (Betweenness, Eigenvector, Closeness) updated.")
             logger.info("SNA Metrics updated successfully.")
 
-    async def wipe_sna_metrics(self):
-        # Connect to your Neo4j instance
+def wipe_sna_metrics(uri, user, pwd):
+    """
+    Clean SNA metrics calculated.
+    """
+    driver = GraphDatabase.driver(uri, auth=(user , pwd))
+    with driver.session() as session:
+        # 1. Delete the calculated meta-edges
+        session.run("MATCH ()-[r:SNA_TIE_STRENGTH]->() DELETE r")
+        print("✅ Deleted SNA_TIE_STRENGTH edges.")
         
-        async with self.driver.session() as session:
-            # 1. Delete the calculated meta-edges
-            session.run("MATCH ()-[r:SNA_TIE_STRENGTH]->() DELETE r")
-            print("✅ Deleted SNA_TIE_STRENGTH edges.")
-            
-            # 2. Remove the mathematical properties from the nodes
-            session.run("""
-                MATCH (n:Inmate) 
-                REMOVE n.betweenness, n.eigenvector, n.reputation_score, n.community_id
-            """)
-            print("✅ Removed structural metrics (betweenness, eigenvector, etc.) from nodes.")
-            
-    
-        print("🧹 Graph successfully reset to its pure semantic state!")            
+        # 2. Remove the mathematical properties from the nodes
+        session.run("""
+            MATCH (n:Inmate) 
+            REMOVE n.betweenness, n.eigenvector, n.reputation_score, n.community_id
+        """)
+        print("✅ Removed structural metrics (betweenness, eigenvector, etc.) from nodes.")
+        
+
+    print("🧹 Graph successfully reset to its pure semantic state!")            
