@@ -206,7 +206,7 @@ async def process_entry_file():
                 "relations": relations_list
                 }
             
-            parsed_result = LogResponse(**r).model_dump()
+            parsed_result = LogResponse(**r).model_dump(mode='json')
 
             await save_in_cache(parsed_result)
     
