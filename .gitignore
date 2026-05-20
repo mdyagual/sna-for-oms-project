@@ -218,5 +218,5 @@ neo4j_data/
 
 # Other related stuff that I don't want to be uploaded
 **.png
-extract_detect_cache_**.json
+extract_detect_**.json
 data_for_test**.txt
