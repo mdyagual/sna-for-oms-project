@@ -95,9 +95,9 @@ class AsyncKnowledgeGraphManager:
             # B. Reputation / Target Score
             # If an inmate has many high-risk arrows pointing AT them, their reputation score rises.
             reputation_query = """
-            MATCH ()-[r]->(i:Inmate)
-            WHERE type(r) <> 'SNA_TIE_STRENGTH'
-            WITH i, sum(r.risk_weight) AS incoming_danger
+            MATCH (i:Inmate)
+            OPTIONAL MATCH ()-[r]->(i) WHERE type(r) <> 'SNA_TIE_STRENGTH'
+            WITH i, COALESCE(sum(r.risk_weight), 0) AS incoming_danger
             SET i.reputation_score = incoming_danger
             """
             await session.run(reputation_query)
@@ -119,17 +119,19 @@ class AsyncKnowledgeGraphManager:
             # If the graph is empty, stop here
             if not records:
                 return
-            
-
 
             # 2. Build the NetworkX Directed Graph
-            G = nx.Graph()
+            G = nx.DiGraph()
             for record in records:
                 G.add_edge(record["source"], record["target"], weight=record["weight"])
-                
+            
+            for u, v, data in G.edges(data=True):
+                # Prevent division by zero
+                G[u][v]['distance'] = 1.0 / data['weight'] if data['weight'] > 0 else 1.0
+
             # 3. Calculate Advanced Structural Metrics mathematically
             # Betweenness: Who acts as the bridge/smuggler between different gangs?
-            betweenness = nx.betweenness_centrality(G, weight='weight')
+            betweenness = nx.betweenness_centrality(G, weight='distance')
             
             # Eigenvector: Who is connected to OTHER highly connected/dangerous people? (The Boss metric)
             try:
