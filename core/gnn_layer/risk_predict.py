@@ -7,7 +7,7 @@ from torch_geometric.nn import GATConv
 from neo4j import GraphDatabase
 import numpy as np
 
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import RepeatedStratifiedKFold
 from sklearn.metrics import roc_auc_score, recall_score
 
 
@@ -22,18 +22,18 @@ class RiskEscalationGNN(torch.nn.Module):
         self.conv2 = GATConv(hidden_channels, hidden_channels)
         
         # Linear layer to classify the edge (Escalation vs. No Escalation)
-        self.classifier = torch.nn.Linear(hidden_channels * 2, 1)
+        self.classifier = torch.nn.Linear(hidden_channels * 2,1)
 
     def forward(self, x, edge_index):
         # 1. Message Passing
         x = self.conv1(x, edge_index)
         x = F.relu(x)
-        x = F.dropout(x, p=0.5, training=self.training)
-        
+        x = F.dropout(x, p=0.5, training=self.training)        
         x = self.conv2(x, edge_index)
         
         # 2. Edge Classification (Combine features of Node A and Node B)
         row, col = edge_index
+
         edge_features = torch.cat([x[row], x[col]], dim=1)
         
         # 3. Predict the probability of escalation
@@ -79,9 +79,8 @@ def fetch_graph_from_neo4j(uri, user, password):
             if src is not None and tgt is not None:
                 edge_index.append([src, tgt])
                 weight = float(e['weight']) if e['weight'] is not None else 1.0
-                #edge_weight_enriched.append([weight])
 
-                # CHANGE THIS LINE: Lower the threshold from 4.0 to 2.5
+                #This line is high linked to the severity level set in the Taxonomy Detection
                 labels.append([1.0 if weight >= 4.0 else 0.0])
 
         edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous() 
@@ -192,8 +191,8 @@ def evaluate_model(model, data, threshold=0.55):
         
         return auc, recall, y_true, preds_probs
     
-def evaluate_with_kfold(model_template, data, n_splits=3, epochs=250):
-    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+def evaluate_with_kfold(model_template, data, n_splits=5, epochs=250):
+    skf = RepeatedStratifiedKFold(n_splits=n_splits, n_repeats=5, random_state=42)
     
     y_array = data.y.cpu().numpy().flatten() 
     edge_indices = np.arange(len(y_array))

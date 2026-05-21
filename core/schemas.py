@@ -35,19 +35,10 @@ class PredicateMap:
 @dataclass(frozen=True)
 class EntityMap:
     RAW_LABEL_GROUPS = {
-        "Inmate": [
-            "Unknown_Attacker", "Unknown_Inmate", "Victim", "Suspect", 
-            "Unknown_Targets", "Unknown_Target", "Target", "Targets"
-        ],
-        "Group": [
-            "Unknown_Group", "Unidentified_Group"
-        ],
-        "Event": [
-            "Unknown_Event", "TimePeriod", "Time", "Date"
-        ],
-        "Staff": [
-            "Unknown_Staff"
-        ]
+        "Inmate": ["Unknown_Attacker", "Unknown_Inmate", "Victim", "Suspect", "Unknown_Targets", "Unknown_Target", "Target", "Targets"],
+        "Group": ["Unknown_Group", "Unidentified_Group" ],
+        "Event": ["Unknown_Event", "TimePeriod", "Time", "Date"],
+        "Staff": ["Unknown_Staff"]
     }
 
     COMPILED_LABEL_MAP = {
