@@ -1,5 +1,6 @@
 from neo4j import AsyncGraphDatabase, GraphDatabase
 import logging
+import math
 import networkx as nx
 import networkx.algorithms.community as nx_comm
 
@@ -168,15 +169,79 @@ class AsyncKnowledgeGraphManager:
             print("✅ Structural Metrics (Betweenness, Eigenvector, Closeness) updated.")
             logger.info("SNA Metrics updated successfully.")
 
+    async def calculate_topological_edge_metrics(self):
+        """
+        Calculates shared-space topological metrics (Jaccard, Common Neighbors, Adamic-Adar)
+        and stores them directly on the SNA_TIE_STRENGTH edges in Neo4j.
+        """
+        logger.info("Starting Topological Edge Feature calculation...")
+        
+        async with self.driver.session() as session:
+            # 1. Fetch the existing edges
+            fetch_query = """
+            MATCH (source:Inmate)-[meta:SNA_TIE_STRENGTH]->(target:Inmate)
+            RETURN source.name AS source, target.name AS target
+            """
+            result = await session.run(fetch_query)
+            records = await result.data()
+            
+            if not records:
+                logger.warning("No SNA_TIE_STRENGTH edges found. Run calculate_sna_metrics first.")
+                return
+
+            # 2. Build an Undirected NetworkX Graph 
+            # (Math requirement: Jaccard & Adamic-Adar require undirected topology)
+            G_nx = nx.Graph()
+            for record in records:
+                G_nx.add_edge(record["source"], record["target"])
+
+            # Helper for safe Adamic-Adar (prevents division by zero)
+            def safe_adamic_adar(G, u, v):
+                aa = 0.0
+                for w in nx.common_neighbors(G, u, v):
+                    deg = G.degree(w)
+                    if deg > 1:
+                        aa += 1 / math.log(deg)
+                return aa
+
+            # Pre-calculate Jaccard to speed up the loop
+            edges_list = list(G_nx.edges())
+            jaccard_generator = nx.jaccard_coefficient(G_nx, edges_list)
+            j_dict = {(u, v): p for u, v, p in jaccard_generator}
+
+            # 3. Calculate and push metrics back to Neo4j edge-by-edge
+            update_count = 0
+            for record in records:
+                u = record["source"]
+                v = record["target"]
+                
+                # Calculate the 3 metrics
+                cn = len(list(nx.common_neighbors(G_nx, u, v)))
+                jac = j_dict.get((u, v), j_dict.get((v, u), 0.0))
+                aa = safe_adamic_adar(G_nx, u, v)
+
+                # Push directly onto the existing meta-edge in Neo4j
+                update_query = """
+                MATCH (source:Inmate {name: $source})-[meta:SNA_TIE_STRENGTH]->(target:Inmate {name: $target})
+                SET meta.common_neighbors = $cn,
+                    meta.jaccard = $jac,
+                    meta.adamic_adar = $aa
+                """
+                await session.run(update_query, source=u, target=v, cn=cn, jac=jac, aa=aa)
+                update_count += 1
+
+            logger.info("Topological Edge Features successfully saved to %d edges.", update_count)
+            print("✅ Topological Edge Features (Jaccard, CN, Adamic-Adar) updated in Neo4j.")
+
 def wipe_sna_metrics(uri, user, pwd):
     """
     Clean SNA metrics calculated.
     """
     driver = GraphDatabase.driver(uri, auth=(user , pwd))
     with driver.session() as session:
-        # 1. Delete the calculated meta-edges
+        # 1. Delete the calculated meta-edges (This wipes Tie Strength AND Topological Edge Features)
         session.run("MATCH ()-[r:SNA_TIE_STRENGTH]->() DELETE r")
-        print("✅ Deleted SNA_TIE_STRENGTH edges.")
+        print("✅ Deleted SNA_TIE_STRENGTH edges (including Jaccard, CN, and Adamic-Adar).")
         
         # 2. Remove the mathematical properties from the nodes
         session.run("""
@@ -185,5 +250,4 @@ def wipe_sna_metrics(uri, user, pwd):
         """)
         print("✅ Removed structural metrics (betweenness, eigenvector, etc.) from nodes.")
         
-
-    print("🧹 Graph successfully reset to its pure semantic state!")            
+    print("🧹 Graph successfully reset to its pure semantic state!")         
