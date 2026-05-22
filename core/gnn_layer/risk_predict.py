@@ -15,16 +15,16 @@ from sklearn.metrics import roc_auc_score, recall_score
 # 1. THE MODEL ARCHITECTURE
 # ==========================================
 class RiskEscalationGNN(torch.nn.Module):
-    def __init__(self, num_node_features, hidden_channels):
+    def __init__(self, num_node_features, hidden_channels, edge_dim=3):
         super(RiskEscalationGNN, self).__init__()
         # GATConv (Graph Attention) learns which neighboring nodes are the most dangerous.
         self.conv1 = GATConv(num_node_features, hidden_channels)
         self.conv2 = GATConv(hidden_channels, hidden_channels)
         
         # Linear layer to classify the edge (Escalation vs. No Escalation)
-        self.classifier = torch.nn.Linear(hidden_channels * 2,1)
+        self.classifier = torch.nn.Linear((hidden_channels * 2) + edge_dim, 1)
 
-    def forward(self, x, edge_index):
+    def forward(self, x, edge_index, edge_attr):
         # 1. Message Passing
         x = self.conv1(x, edge_index)
         x = F.relu(x)
@@ -34,7 +34,7 @@ class RiskEscalationGNN(torch.nn.Module):
         # 2. Edge Classification (Combine features of Node A and Node B)
         row, col = edge_index
 
-        edge_features = torch.cat([x[row], x[col]], dim=1)
+        edge_features = torch.cat([x[row], x[col], edge_attr], dim=1)
         
         # 3. Predict the probability of escalation
         return self.classifier(edge_features)
@@ -46,7 +46,8 @@ def fetch_graph_from_neo4j(uri, user, password):
     driver = GraphDatabase.driver(uri, auth=(user, password))
     
     with driver.session() as session:
-        # Fetch Nodes and SNA metrics
+        # 1. Fetch Nodes and SNA metrics
+        # Note: If you decided to add 'degree', you would update this query and change num_node_features=4 in PyTorch
         node_query = "MATCH (i:Inmate) RETURN i.name AS name, i.reputation_score AS rep, i.betweenness AS betw, i.eigenvector AS eigen"        
         nodes = session.run(node_query).data()
         
@@ -56,21 +57,32 @@ def fetch_graph_from_neo4j(uri, user, password):
             
         node_mapping = {node['name']: idx for idx, node in enumerate(nodes)}
 
-        #Create a reverse mapping so we remember who is who!
+        # Create a reverse mapping so we remember who is who!
         reverse_mapping = {idx: node['name'] for idx, node in enumerate(nodes)}
         
         # Handle potential None values if SNA metrics haven't been calculated properly
         x_enriched = torch.tensor([[n['rep'] or 0.0, n['betw'] or 0.0, n['eigen'] or 0.0] for n in nodes], dtype=torch.float)
         x_baseline = torch.ones((len(nodes), 1), dtype=torch.float)
 
-        # Fetch Edges and Taxonomy Weights
-        edge_query = """MATCH (a:Inmate)-[r]->(b:Inmate) 
+        # 2. Fetch Edges, Taxonomy Weights, AND Topological Edge Features
+        # We use OPTIONAL MATCH to grab the engineered metrics from the SNA_TIE_STRENGTH meta-edge
+        edge_query = """
+        MATCH (a:Inmate)-[r]->(b:Inmate) 
         WHERE type(r) <> 'SNA_TIE_STRENGTH'
-        RETURN a.name AS source, b.name AS target, r.risk_weight AS weight"""
+        OPTIONAL MATCH (a)-[meta:SNA_TIE_STRENGTH]->(b)
+        RETURN a.name AS source, 
+               b.name AS target, 
+               r.risk_weight AS weight,
+               meta.common_neighbors AS cn,
+               meta.jaccard AS jac,
+               meta.adamic_adar AS aa
+        """
         edges = session.run(edge_query).data()
         
         edge_index = []
         labels = [] 
+        edge_features_enriched = []
+        edge_features_baseline = []
 
         for e in edges:
             src = node_mapping.get(e['source'])
@@ -80,14 +92,30 @@ def fetch_graph_from_neo4j(uri, user, password):
                 edge_index.append([src, tgt])
                 weight = float(e['weight']) if e['weight'] is not None else 1.0
 
-                #This line is high linked to the severity level set in the Taxonomy Detection
+                # Target Ground Truth
                 labels.append([1.0 if weight >= 4.0 else 0.0])
+                
+                # Extract the 3 Edge Features (default to 0.0 if Neo4j returns None)
+                cn = float(e['cn'] or 0.0)
+                jac = float(e['jac'] or 0.0)
+                aa = float(e['aa'] or 0.0)
+                
+                # Append to the enriched tracker
+                edge_features_enriched.append([cn, jac, aa])
+                
+                # The baseline gets zeros so the GNN doesn't crash, but gains no predictive advantage
+                edge_features_baseline.append([0.0, 0.0, 0.0])
 
+        # 3. Convert all lists to PyTorch Tensors
         edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous() 
         y = torch.tensor(labels, dtype=torch.float)
+        
+        edge_attr_enriched = torch.tensor(edge_features_enriched, dtype=torch.float)
+        edge_attr_baseline = torch.tensor(edge_features_baseline, dtype=torch.float)
 
-        data_enriched = Data(x=x_enriched, edge_index=edge_index, y=y)
-        data_baseline = Data(x=x_baseline, edge_index=edge_index, y=y)
+        # 4. Construct the Final Data Objects
+        data_enriched = Data(x=x_enriched, edge_index=edge_index, y=y, edge_attr=edge_attr_enriched)
+        data_baseline = Data(x=x_baseline, edge_index=edge_index, y=y, edge_attr=edge_attr_baseline)
         
         return data_baseline, data_enriched, reverse_mapping
 
@@ -157,7 +185,7 @@ def train_model(model, data, epochs=100):
     model.train()
     for epoch in range(epochs):
         optimizer.zero_grad() 
-        out = model(data.x, data.edge_index)
+        out = model(data.x, data.edge_index, data.edge_attr)
         loss = criterion(out, data.y)
         loss.backward()
         optimizer.step()
@@ -172,7 +200,7 @@ def evaluate_model(model, data, threshold=0.55):
     model.eval() 
     with torch.no_grad():
         # 1. Get raw logits from the model
-        logits = model(data.x, data.edge_index)
+        logits = model(data.x, data.edge_index, data.edge_attr)
         
         # 2. Manually apply Sigmoid to get probabilities (0.0 to 1.0)
         predictions = torch.sigmoid(logits)
@@ -200,19 +228,21 @@ def evaluate_with_kfold(model_template, data, n_splits=5, epochs=250):
     oof_y_true = []
     oof_y_pred_probs = []
 
-    for fold, (train_idx, test_idx) in enumerate(skf.split(edge_indices, y_array)):
+    for _, (train_idx, test_idx) in enumerate(skf.split(edge_indices, y_array)):
         
         # 1. Slice the Graph for the current fold
         train_data = Data(
             x=data.x,
             edge_index=data.edge_index[:, train_idx],
-            y=data.y[train_idx]
+            y=data.y[train_idx],
+            edge_attr=data.edge_attr[train_idx]
         )
 
         test_data = Data(
             x=data.x,
             edge_index=data.edge_index[:, test_idx],
-            y=data.y[test_idx]
+            y=data.y[test_idx],
+            edge_attr=data.edge_attr[test_idx]
         )
 
         # 2. Balance the Training Data strictly (Leaves Test Data untouched)
@@ -229,7 +259,7 @@ def evaluate_with_kfold(model_template, data, n_splits=5, epochs=250):
         # 5. Predict on the unseen, imbalanced Test Slice
         trained_fold_model.eval()
         with torch.no_grad():
-            logits = trained_fold_model(test_data.x, test_data.edge_index)
+            logits = trained_fold_model(test_data.x, test_data.edge_index, test_data.edge_attr)
             probs = torch.sigmoid(logits).cpu().numpy()
 
         # 6. Save the honest predictions
@@ -247,7 +277,7 @@ def generate_threat_report(model, data, reverse_mapping, threshold=0.55):
     """
     model.eval()
     with torch.no_grad():
-        logits = model(data.x, data.edge_index)
+        logits = model(data.x, data.edge_index, data.edge_attr)
         predictions = torch.sigmoid(logits).numpy() 
         
     alerts = []
