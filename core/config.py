@@ -16,17 +16,15 @@ class Neo4J:
 
 @dataclass(frozen=True)
 class LLMConfig:   
-
     ## Extractor model
     EXTR_ENT_REL: str = "meta-llama/Llama-3.1-8B-Instruct"
-
     ## DETECTION TAXONOMY
     # Sentimental and Emotional
     GROUP_A: str = "cardiffnlp/twitter-roberta-base-sentiment-latest"
     # Hate and Threat
     GROUP_B: str = "facebook/roberta-hate-speech-dynabench-r4-target"
     # Extremist, Radicalism and Violated-scaled
-    GROUP_C: str = "meta-llama/Meta-Llama-3-8B-Instruct"
+    GROUP_C: str = "meta-llama/Llama-3.1-8B-Instruct"
 
 @dataclass(frozen=True)
 class Prompt:
@@ -34,12 +32,14 @@ class Prompt:
     You are an expert Intelligence Analyst specialized in Social Network Analysis (SNA) and Offender Management Systems (OMS).
     Your task is to extract a structured Knowledge Graph (Entities and Relationships) from the text.
 
-    CRITICAL RULE 1: STRICT ENTITY TYPING (No Duplicates)
+   CRITICAL RULE 1: STRICT ENTITY TYPING AND NAMING (No Abstracts, No Duplicates)
     - You MUST use EXACTLY one of the following labels in PascalCase: [Inmate, Staff, ExternalContact, Group, Contraband, Weapon, Currency, InternalLocation, ExternalLocation, Event, DigitalAsset].
-    - DO NOT use ALL CAPS (e.g., use 'InternalLocation', NEVER 'INTERNALLOCATION').
-    - DO NOT extract body parts, generic items, dates, times, durations or the reporting officer/system administrator. If a staff member is simply "analyzing," "reviewing," or "investigating" an item or event, IGNORE IT.
-    - If an entity's exact name is missing (e.g., "unknown attackers"), you MUST still extract it. Use a descriptive placeholder (e.g., Unknown_Attacker, Unknown_Group) and assign it the closest valid label from the list above (e.g., Inmate or Group).
-
+    - DO NOT use ALL CAPS.
+    - NEGATIVE CONSTRAINT: DO NOT extract abstract concepts, mental states, emotions, or structural concepts (e.g., NEVER extract 'Trauma', 'Paranoia', 'Depression', 'Gang Factions', or 'Gang Structure'). Only extract tangible, physical entities or specific named groups.
+    - NEGATIVE CONSTRAINT: DO NOT extract generic body parts, dates, times, or the reporting system administrator.
+    - PLACEHOLDER RULE: If a person or group's exact name is missing, you MUST use EXACTLY one of these standard placeholders: "Unknown Inmate", "Unknown Staff", or "Unknown Group". 
+    - DO NOT invent variations like "Inmate1", "Inmate2", "Officers", "Corrupt Officer", or "External".
+    
     CRITICAL RULE 2: STRICT PREDICATE TRANSLATION (No Synonyms Allowed)
     - You are FORBIDDEN from inventing your own verbs OR USING the exact verbs from the text (e.g., NEVER output "TARGETS" or "PLANS").
     - You MUST TRANSLATE the action into EXACTLY ONE of these 10 standardized buckets (UPPERCASE_WITH_UNDERSCORES):
