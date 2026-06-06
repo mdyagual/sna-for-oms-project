@@ -35,10 +35,12 @@ class PredicateMap:
 @dataclass(frozen=True)
 class EntityMap:
     RAW_LABEL_GROUPS = {
-        "Inmate": ["Unknown_Attacker", "Unknown_Inmate", "Victim", "Suspect", "Unknown_Targets", "Unknown_Target", "Target", "Targets"],
-        "Group": ["Unknown_Group", "Unidentified_Group" ],
-        "Event": ["Unknown_Event", "TimePeriod", "Time", "Date"],
-        "Staff": ["Unknown_Staff"]
+        "Inmate": ["Person", "Prisoner", "Convict", "Individual", "Offender"],
+        "Group": ["Gang", "Organization", "Syndicate", "Faction", "Cartel"],
+        "Event": ["Incident", "Meeting", "Altercation", "Riot"],
+        "Staff": ["Guard", "Employee", "Warden", "Personnel"],
+        "Contraband": ["Drugs", "Narcotics", "Phone", "Cell Phone"],
+        "Weapon": ["SharpObject", "Shiv", "Shank", "Blade"]
     }
 
     COMPILED_LABEL_MAP = {
@@ -47,6 +49,21 @@ class EntityMap:
         for word in words
     }
 
+@dataclass(frozen=True)
+class NameResolutionMap:
+    """Consolidates messy LLM entity names into clean, universal graph nodes."""
+    RAW_NAME_GROUPS = {
+        "Unknown Inmate": ["Inmate1", "Inmate2", "Inmate 1", "Inmate 2", "Unknowninmate", "Hispanic Inmate", "Black Inmate", "White Inmate", "Suspect", "Victim", "Attacker", "Unknown Attacker", "Unknown Target", "Target", "Targets"],
+        "Unknown Staff": ["Officer", "Officers", "Staff", "Staff Member", "Corrupt Officer", "Corrupt Staff Member", "Guard", "Guards", "Unknownstaff", "Unknown Staff Member"],
+        "Unknown Group": ["Gang Factions", "Gang Structure", "Factions", "Rival Gang", "Unknowngroup", "Unknown Group", "Unidentified Group"],
+        "External Contact": ["External", "Civilian", "Outside Contact"]
+    }
+
+    COMPILED_NAME_MAP = {
+        word.lower(): target 
+        for target, words in RAW_NAME_GROUPS.items() 
+        for word in words
+    }
 
 
 #The taxonomy defined for the project with their severity to consider
@@ -59,6 +76,7 @@ class Taxonomy(str, Enum):
     THREAT = "THREAT"
     VIOLATED_SCALED = "VIOLATED_SCALED"
     NEUTRAL = "NEUTRAL"
+    SYSTEM_ERROR = "SYSTEM_ERROR"
 
     @property
     def severity(self) -> int:
@@ -71,7 +89,8 @@ class Taxonomy(str, Enum):
             self.RADICALISM: 5,
             self.THREAT: 4,
             self.VIOLATED_SCALED: 2,
-            self.NEUTRAL: 1
+            self.NEUTRAL: 1,
+            self.SYSTEM_ERROR:0
         }
         return severity_map[self]
 
@@ -87,6 +106,7 @@ class EntityOntology(str, Enum):
     EXTERNAL_LOCATION = "ExternalLocation"
     EVENT = "Event"
     DIGITAL_ASSET = "DigitalAsset"
+    UNKNOWN = "Unknown"
 
 class PredicateOntology(str, Enum):
     ASSAULTS = "ASSAULTS"
@@ -105,12 +125,27 @@ class Entity(BaseModel):
     entity: str = Field(..., description="Entity name")
     label: EntityOntology = Field(..., description="Entity type defined in EntityOntology")
 
+    @field_validator('entity', mode='before')
+    @classmethod
+    def normalize_entity_name(cls, value):        
+        if "_" in value:
+            return value.replace("_", " ")
+        if isinstance(value, str):            
+            val_clean = value.strip().title()
+            lower_val = val_clean.lower()
+            return NameResolutionMap.COMPILED_NAME_MAP.get(lower_val, val_clean)
+        return value
+
     @field_validator('label', mode='before')
     @classmethod
     def heal_label_hallucinations(cls, value: str) -> str:
         if isinstance(value, str):
-            val_clean = value.strip()            
-            return EntityMap.COMPILED_LABEL_MAP.get(val_clean, val_clean)
+            val_clean = value.strip()
+            lower_val = val_clean.lower()
+            entity_cat = EntityMap.COMPILED_LABEL_MAP.get(lower_val, val_clean) 
+            if entity_cat not in [e.value for e in EntityOntology]:
+                return EntityOntology.UNKNOWN.value          
+            return entity_cat
         return value
 
 class Relation(BaseModel):
@@ -123,8 +158,7 @@ class Relation(BaseModel):
     def heal_missing_nodes(cls, value) -> str:
         # If the LLM output null (None) or an empty string ""
         if not value:
-            return "Unknown_Entity"
-            
+            return "UnknownEntity"            
         # Ensure it's a string just in case the LLM outputs an integer ID
         return str(value)
 
@@ -132,8 +166,11 @@ class Relation(BaseModel):
     @classmethod
     def heal_llm_hallucinations(cls, value: str) -> str:
         if isinstance(value, str):
-            val_clean = value.upper().strip()            
-            return PredicateMap.COMPILED_HEALING_MAP.get(val_clean, val_clean)                            
+            val_clean = value.upper().strip()
+            rel_cat = PredicateMap.COMPILED_HEALING_MAP.get(val_clean, val_clean) 
+            if rel_cat not in [p.value for p in PredicateOntology]:
+                return PredicateOntology.ASSOCIATED_WITH.value           
+            return rel_cat                            
         return value
 
 
