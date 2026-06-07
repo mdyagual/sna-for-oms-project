@@ -35,7 +35,6 @@ def safe_json_load(content):
 
     return d_log
 
-# Add this helper function at the top of extract_detect.py
 def heal_and_deduplicate_graph(entities_list, relations_list):
     """Ensures no duplicate edges exist and no edges point to missing nodes."""
     
@@ -67,6 +66,23 @@ def heal_and_deduplicate_graph(entities_list, relations_list):
             
     return entities_list, unique_relations
 
+def normalize_confidence(score: float) -> float:
+    """Ensure confidence is always 0-1. Handle Llama's percentage returns."""
+    try:
+        score = float(score)
+        # If it looks like a percentage (>1), treat as out-of-range
+        if score > 1.0:
+            # Option A: Assume it's a percentage and divide by 100
+            if score <= 100:
+                return score / 100.0
+            # Option B: Clamp to 1.0 (treat as "super confident")
+            else:
+                return 1.0
+        # Option C: Clamp negative to 0
+        return max(0.0, min(1.0, score))
+    except (ValueError, TypeError):
+        return 0.0  # Invalid → assume no confidence
+    
 async def process_single_log_safely(i, text):
     """Wrapper to process a log while respecting the rate-limit bouncer."""
     async with semaphore:
@@ -212,7 +228,7 @@ async def get_master_taxonomy(original_text):
         label_c = data_c.get("taxonomy_classification", Taxonomy.NEUTRAL.name)
 
         try:
-            score_c = float(data_c.get("confidence_score", 0.0))
+            score_c = normalize_confidence(float(data_c.get("confidence_score", 0.0)))
         except (ValueError, TypeError):
             score_c = 0.0
 

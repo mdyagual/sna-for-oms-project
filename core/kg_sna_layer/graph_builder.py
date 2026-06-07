@@ -2,9 +2,10 @@ from neo4j import AsyncGraphDatabase, GraphDatabase
 import logging
 import math
 import networkx as nx
+import torch
 import networkx.algorithms.community as nx_comm
 
-from core.schemas import Taxonomy
+from core.schemas import EntityOntology, Taxonomy
 from core.schemas import PredicateOntology
 
 logger = logging.getLogger(__name__)
@@ -17,11 +18,12 @@ class AsyncKnowledgeGraphManager:
         await self.driver.close()
 
     async def ingest_log_data(self, processed_json: dict):
-        log_id = processed_json.get("id", "UNKNOWN")
+        log_id = processed_json.get("id", EntityOntology.UNKNOWN.value)
+        short_id = str(log_id)[:8]
         category = processed_json.get("taxonomy_category", Taxonomy.NEUTRAL.value)
         entities = processed_json.get("entities", [])
         relations = processed_json.get("relations", [])
-        confidence = processed_json.get("confidence", 1)
+        confidence = normalize_confidence(processed_json.get("confidence", 1))
 
         try:
             base_severity = Taxonomy(category).severity
@@ -39,8 +41,12 @@ class AsyncKnowledgeGraphManager:
             for ent in entities:
                 label = str(ent.get("label", "Entity")).replace(" ", "")
                 name = str(ent.get("entity", "Unknown"))
+
+                if "Unknown" in name:
+                    name = f"{name}_{short_id}"
                 
                 query = f"MERGE (n:{label} {{name: $name}})"
+                
                 # Await the execution of the query
                 await session.run(query, name=name)
                 logger.info("Upserted Node: (%s) %s", label, name)
@@ -49,6 +55,10 @@ class AsyncKnowledgeGraphManager:
             for rel in relations:
                 subj = str(rel.get("subject"))
                 obj = str(rel.get("object"))
+                if "Unknown" in subj:
+                    subj = f"{subj}_{short_id}"
+                if "Unknown" in obj:
+                    obj = f"{obj}_{short_id}"
                 predicate = str(rel.get("predicate", PredicateOntology.ASSOCIATED_WITH.value)).upper().replace(" ", "_").replace("-", "_")
 
                 query = f"""
@@ -233,6 +243,12 @@ class AsyncKnowledgeGraphManager:
             logger.info("Topological Edge Features successfully saved to %d edges.", update_count)
             print("✅ Topological Edge Features (Jaccard, CN, Adamic-Adar) updated in Neo4j.")
 
+def normalize_confidence(score: float) -> float:
+    score = float(score)
+    if score > 1.0 and score <= 100:
+        return score / 100.0
+    return max(0.0, min(1.0, score))
+
 def wipe_sna_metrics(uri, user, pwd):
     """
     Clean SNA metrics calculated.
@@ -250,4 +266,64 @@ def wipe_sna_metrics(uri, user, pwd):
         """)
         print("✅ Removed structural metrics (betweenness, eigenvector, etc.) from nodes.")
         
-    print("🧹 Graph successfully reset to its pure semantic state!")         
+    print("🧹 Graph successfully reset to its pure semantic state!") 
+
+def calculate_strict_fold_topology(reference_edge_index, target_edge_index, num_nodes, edge_weights=None):
+    # 1. Build the Safe Training Graph (Directed)
+    G_ref = nx.DiGraph() 
+    G_ref.add_nodes_from(range(num_nodes))
+    
+    edges = reference_edge_index.t().tolist()
+    
+    if edge_weights is not None:
+        weights = edge_weights.tolist()
+        weighted_edges = [(u, v, {'weight': w, 'distance': 1.0 / w if w > 0 else 1.0}) for (u, v), w in zip(edges, weights)]
+        G_ref.add_edges_from(weighted_edges)
+        
+        # NLP Context: Source = Aggressiveness (Outgoing), Target = Reputation (Incoming)
+        reputation = {n: 0.0 for n in range(num_nodes)}
+        aggressiveness = {n: 0.0 for n in range(num_nodes)}
+        for u, v, data in G_ref.edges(data=True):
+            w = data.get('weight', 0.0)
+            aggressiveness[u] += w 
+            reputation[v] += w    
+    else:
+        G_ref.add_edges_from(edges)
+
+    # 2. NODE METRICS 
+    betweenness = nx.betweenness_centrality(G_ref, weight='distance' if edge_weights is not None else None)
+    try:
+        eigenvector = nx.eigenvector_centrality(G_ref, max_iter=1000, weight='weight' if edge_weights is not None else None)
+    except nx.PowerIterationFailedConvergence:
+        eigenvector = {n: 0.0 for n in G_ref.nodes()}
+
+    # 3. EDGE METRICS 
+    G_un = G_ref.to_undirected() # Required for Common Neighbors & Jaccard
+    target_edges = target_edge_index.t().tolist()
+    edge_features = []
+    
+    for u, v in target_edges:
+        # Relational Edge Topology (Undirected)
+        cn = len(list(nx.common_neighbors(G_un, u, v)))
+        try:
+            preds = nx.jaccard_coefficient(G_un, [(u, v)])
+            jac = next(preds)[2]
+        except ZeroDivisionError:
+            jac = 0.0
+            
+        base_feats = [
+            cn, 
+            jac, 
+            betweenness.get(u, 0.0), 
+            betweenness.get(v, 0.0),
+            eigenvector.get(u, 0.0),
+            eigenvector.get(v, 0.0)
+        ]
+        
+        # If Enriched, add the 2 NLP Edge Features
+        if edge_weights is not None:
+            base_feats.extend([aggressiveness.get(u, 0.0), reputation.get(v, 0.0)])
+            
+        edge_features.append(base_feats)
+        
+    return torch.tensor(edge_features, dtype=torch.float)       
