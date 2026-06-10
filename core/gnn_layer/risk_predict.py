@@ -54,26 +54,13 @@ def fetch_graph_from_neo4j(uri, user, password):
     
     with driver.session() as session:
         # 1. Fetch Nodes and SNA metrics
-        # Note: If you decided to add 'degree', you would update this query and change num_node_features=4 in PyTorch
-        node_query_d = """MATCH (i:Inmate) 
-        RETURN i.name AS name, 
-        i.reputation_score AS rep, 
-        i.betweenness AS betw, 
-        i.eigenvector AS eigen"""
-
-        node_query_d2 = """
-        MATCH (i) 
-        WHERE EXISTS(i.name)
-        RETURN i.name AS name, 
-               COALESCE(i.reputation_score, 0.0) AS rep, 
-               COALESCE(i.betweenness, 0.0) AS betw, 
-               COALESCE(i.eigenvector, 0.0) AS eigen
-        """   
+     
         node_query = """
         MATCH (i) 
         WHERE i.name IS NOT NULL
         RETURN i.name AS name
-        """   
+        ORDER BY i.name ASC
+        """
         nodes = session.run(node_query).data()
         
         # Safety check for empty database
@@ -91,18 +78,7 @@ def fetch_graph_from_neo4j(uri, user, password):
         x_baseline = torch.ones((len(nodes), 1), dtype=torch.float)
 
         # 2. Fetch Edges, Taxonomy Weights, AND Topological Edge Features
-        # We use OPTIONAL MATCH to grab the engineered metrics from the SNA_TIE_STRENGTH meta-edge
-        edge_query_d = """
-        MATCH (a:Inmate)-[r]->(b:Inmate) 
-        WHERE type(r) <> 'SNA_TIE_STRENGTH'
-        OPTIONAL MATCH (a)-[meta:SNA_TIE_STRENGTH]->(b)
-        RETURN a.name AS source, 
-               b.name AS target, 
-               r.risk_weight AS weight,
-               meta.common_neighbors AS cn,
-               meta.jaccard AS jac,
-               meta.adamic_adar AS aa
-        """
+      
         edge_query = """
         MATCH (a)-[r]->(b) 
         WHERE type(r) <> 'SNA_TIE_STRENGTH'
@@ -113,6 +89,7 @@ def fetch_graph_from_neo4j(uri, user, password):
                meta.common_neighbors AS cn,
                meta.jaccard AS jac,
                meta.adamic_adar AS aa
+        ORDER BY a.name ASC, b.name ASC, type(r) ASC
         """
         edges = session.run(edge_query).data()
         
@@ -126,6 +103,10 @@ def fetch_graph_from_neo4j(uri, user, password):
         for e in edges:
             src = node_mapping.get(e['source'])
             tgt = node_mapping.get(e['target'])
+
+            # 🛑 THE FIX: Ignore the edge entirely if the source and target are the exact same node!
+            if src == tgt:
+                continue
             
             if src is not None and tgt is not None:
                 edge_index.append([src, tgt])
