@@ -32,7 +32,6 @@ class AsyncKnowledgeGraphManager:
             category = "NEUTRAL"
             base_severity = Taxonomy.NEUTRAL.severity
 
-
         risk_weight = base_severity * confidence
 
         # Open an async session
@@ -42,7 +41,11 @@ class AsyncKnowledgeGraphManager:
                 label = str(ent.get("label", "Entity")).replace(" ", "")
                 name = str(ent.get("entity", "Unknown"))
 
+                if "DROP" in name.upper() or "GENERIC" in name.upper():
+                    continue
+
                 if "Unknown" in name:
+                    name = name.replace(" ", "_")
                     name = f"{name}_{short_id}"
                 
                 query = f"MERGE (n:{label} {{name: $name}})"
@@ -55,10 +58,21 @@ class AsyncKnowledgeGraphManager:
             for rel in relations:
                 subj = str(rel.get("subject"))
                 obj = str(rel.get("object"))
+
+                # 🛑 ADDED MISSING FIREWALL: Stop the loop if it's garbage!
+                if "DROP" in subj.upper() or "GENERIC" in subj.upper():
+                    continue
+                if "DROP" in obj.upper() or "GENERIC" in obj.upper():
+                    continue
+                
+                # The Unknown logic matches perfectly!
                 if "Unknown" in subj:
+                    subj = subj.replace(" ", "_")
                     subj = f"{subj}_{short_id}"
                 if "Unknown" in obj:
+                    obj = obj.replace(" ", "_")
                     obj = f"{obj}_{short_id}"
+                    
                 predicate = str(rel.get("predicate", PredicateOntology.ASSOCIATED_WITH.value)).upper().replace(" ", "_").replace("-", "_")
 
                 query = f"""
