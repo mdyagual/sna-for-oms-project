@@ -229,20 +229,27 @@ def train_model(model, data, epochs=100):
     for epoch in range(epochs):
         optimizer.zero_grad() 
         out = model(data.x, data.edge_index, data.edge_attr)
-        loss = criterion(out, data.y)
+        
+        # --- THE FINAL FIX ---
+        # Squeeze BOTH so they are exactly 1D arrays of shape [Edges]
+        out_flat = out.squeeze()
+        y_true = data.y.float().squeeze() # <--- Add .squeeze() here!
+        
+        # Now both are exactly [3258] and perfectly aligned
+        loss = criterion(out_flat, y_true)
         loss.backward()
         optimizer.step()
 
         with torch.no_grad():
-            preds = (torch.sigmoid(out.squeeze()) > 0.5).float()
-            correct = (preds == data.y).float().sum()
+            preds = (torch.sigmoid(out_flat) > 0.5).float()
+            correct = (preds == y_true).float().sum()
             acc = correct / data.y.size(0)
 
         history['loss'].append(loss.item())
         history['acc'].append(acc.item())
         
         if epoch % 20 == 0:
-            print(f"Epoch {epoch:03d} | Loss: {loss.item():.4f}")
+            print(f"Epoch {epoch:03d} | Loss: {loss.item():.4f} | Acc: {acc.item():.4f}")
             
     return model, history
 
