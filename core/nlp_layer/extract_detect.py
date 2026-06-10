@@ -36,35 +36,45 @@ def safe_json_load(content):
     return d_log
 
 def heal_and_deduplicate_graph(entities_list, relations_list):
-    """Ensures no duplicate edges exist and no edges point to missing nodes."""
+    """Prunes bad nodes, removes duplicate edges, and fixes missing orphans."""
     
-    # 1. Deduplicate relations (Convert list of dicts to a set of tuples, then back to dicts)
+    # 1. Prune Generic Nodes (Flagged by Pydantic)
+    valid_entities = [e for e in entities_list if e.get("entity") != "DROP_ME_GENERIC"]
+    
+    # Extract all cleanly declared node names
+    declared_entities = {e.get("entity") for e in valid_entities}
+    
     seen_edges = set()
     unique_relations = []
+    
+    # 2. Prune bad edges and deduplicate
     for r in relations_list:
+        subj = r.get("subject", "")
+        pred = r.get("predicate", "")
+        obj = r.get("object", "")
+        
+        # SILENT PRUNER: Drop edge if it connects to a generic/garbage node
+        if subj == "DROP_ME_GENERIC" or obj == "DROP_ME_GENERIC":
+            continue
+            
         # Create a unique signature for the edge
-        edge_sig = (r.get("subject", "").title(), r.get("predicate", "").upper(), r.get("object", "").title())
+        edge_sig = (subj, pred, obj)
+        
         if edge_sig not in seen_edges:
             seen_edges.add(edge_sig)
             unique_relations.append(r)
             
-    # 2. Extract all node names that were formally declared in entities
-    declared_entities = {e.get("entity", "").title() for e in entities_list}
-    
-    # 3. Find any orphans (nodes mentioned in relations but missing from entities)
-    for r in unique_relations:
-        subj = r.get("subject", "").title()
-        obj = r.get("object", "").title()
-        
-        if subj and subj not in declared_entities:
-            entities_list.append({"entity": subj, "label": "Unknown"})
-            declared_entities.add(subj)
+            # 3. Heal Orphans (Nodes in relations but missing from entities)
+            if subj and subj not in declared_entities:
+                valid_entities.append({"entity": subj, "label": "Unknown"})
+                declared_entities.add(subj)
+                
+            if obj and obj not in declared_entities:
+                valid_entities.append({"entity": obj, "label": "Unknown"})
+                declared_entities.add(obj)
+                
+    return valid_entities, unique_relations
             
-        if obj and obj not in declared_entities:
-            entities_list.append({"entity": obj, "label": "Unknown"})
-            declared_entities.add(obj)
-            
-    return entities_list, unique_relations
 
 def normalize_confidence(score: float) -> float:
     """Ensure confidence is always 0-1. Handle Llama's percentage returns."""
@@ -140,6 +150,23 @@ async def process_single_log_safely(i, text):
                     "relations": relations_list
                 }
                 
+                # STEP 1: Pydantic Validation 
+                # (Standardizes names, strips adjectives, flags generics, enforces Ontology)
+                cleaned_result = LogResponse(**r).model_dump(mode='json')
+                
+                # STEP 2: Topology Healing 
+                # (Prunes the flagged generics, deduplicates edges, fixes missing orphans)
+                final_ents, final_rels = heal_and_deduplicate_graph(
+                    cleaned_result["entities"], 
+                    cleaned_result["relations"]
+                )
+                
+                # Re-assign the perfected topology back to the dictionary
+                cleaned_result["entities"] = final_ents
+                cleaned_result["relations"] = final_rels
+                
+                parsed_result = cleaned_result
+
                 parsed_result = LogResponse(**r).model_dump(mode='json')
                 
                 # If we successfully parsed everything, break out of the retry loop
@@ -236,22 +263,22 @@ async def get_master_taxonomy(original_text):
         # THE ARBITRATOR HIERARCHY
         # ==========================================
         
-        # TIER 1: High Threats AND Confident Neutrals (Llama C output)
-        if score_c >= 0.70:
-            # If it's a threat, trigger it immediately
-            if label_c in [Taxonomy.EXTREMIST.name, Taxonomy.RADICALISM.name, Taxonomy.THREAT.name, Taxonomy.VIOLATED_SCALED.name]:
-                return {"taxonomy_category": label_c, "reason": f"Group C detected {label_c}.", "confidence_score": score_c}
+        # TIER 1: Extreme Physical Threats (Llama C)
+        if score_c >= 0.70 and label_c in [Taxonomy.EXTREMIST.name, Taxonomy.RADICALISM.name, Taxonomy.THREAT.name, Taxonomy.VIOLATED_SCALED.name]:
+            return {"taxonomy_category": label_c, "reason": f"Group C detected {label_c}.", "confidence_score": score_c}
             
-            # THE FIX: If Llama is highly confident there is NO threat, stop the pipeline!
-            # Do not let RoBERTa force an "Emotional" tag on a boring report.
-            elif label_c == Taxonomy.NEUTRAL.name:
-                return {"taxonomy_category": Taxonomy.NEUTRAL.name, "reason": "Group C confirmed Neutral.", "confidence_score": score_c}
-            
-        # TIER 2: Hate Speech (RoBERTa B output)
+        # TIER 2: Hate Speech (RoBERTa B)
+        # This now catches hate speech even if Llama-3 was too "polite" to flag it!
         if label_b == "hate" and score_b > 0.75:
             return {"taxonomy_category": Taxonomy.HATE.name, "reason": "Group B detected hate.", "confidence_score": score_b}
+
+        # TIER 3: The Neutral Shield (Llama C)
+        # If it's not a threat and not hate, let's trust Llama if it says the log is boring.
+        # This stops the Sentiment model below from turning everything into an "Emotional" alert.
+        if score_c >= 0.70 and label_c == Taxonomy.NEUTRAL.name:
+            return {"taxonomy_category": Taxonomy.NEUTRAL.name, "reason": "Group C confirmed Neutral.", "confidence_score": score_c}
             
-        # TIER 3: Emotional/Sentimental (RoBERTa A output)
+        # TIER 4: Emotional/Sentimental (RoBERTa A)
         if label_a == "negative" and score_a > 0.60:
             return {"taxonomy_category": Taxonomy.EMOTIONAL.name, "reason": "Group A detected negative emotion.", "confidence_score": score_a}
         elif label_a in ["positive", "neutral"]:
@@ -283,6 +310,22 @@ async def process_entry(text):
                 "entities": entities_list,
                 "relations": relations_list
                 }
+    
+    # 1. Keep only entities that are NOT flagged for dropping
+    valid_entities = [e for e in r["entities"] if e.get("entity") != "Generic"]
+    
+    # 2. Get a list of surviving names
+    surviving_entity_names = {e.get("entity") for e in valid_entities}
+    
+    # 3. Keep relations only if BOTH subject and object survived
+    valid_relations = [
+        rel for rel in r["relations"] 
+        if rel.get("subject") in surviving_entity_names 
+        and rel.get("object") in surviving_entity_names
+    ]
+    
+    r["entities"] = valid_entities
+    r["relations"] = valid_relations
             
     parsed_result = LogResponse(**r).model_dump(mode='json')
 
