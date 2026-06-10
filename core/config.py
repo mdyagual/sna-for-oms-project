@@ -34,10 +34,11 @@ class Prompt:
 
    CRITICAL RULE 1: STRICT ENTITY TYPING AND NAMING (No Abstracts, No Duplicates)
     - You MUST use EXACTLY one of the following labels in PascalCase: [Inmate, Staff, ExternalContact, Group, Contraband, Weapon, Currency, InternalLocation, ExternalLocation, Event, DigitalAsset].
+    - NEGATIVE CONSTRAINT: DO NOT use underscores or snake_case for entity names. Use spaces (e.g., "Gang Leader" NOT "Gang_Leader").
     - DO NOT use ALL CAPS.
     - NEGATIVE CONSTRAINT: DO NOT extract abstract concepts, mental states, emotions, or structural concepts (e.g., NEVER extract 'Trauma', 'Paranoia', 'Depression', 'Gang Factions', or 'Gang Structure'). Only extract tangible, physical entities or specific named groups.
     - NEGATIVE CONSTRAINT: DO NOT extract generic body parts, dates, times, or the reporting system administrator.
-    - PLACEHOLDER RULE: If a person or group's exact name is missing, you MUST use EXACTLY one of these standard placeholders: "Unknown Inmate", "Unknown Staff", or "Unknown Group". 
+    - PLACEHOLDER RULE: If a person's exact name is missing, use "Unknown Inmate" or "Unknown Staff". If the text mentions MULTIPLE unnamed people (e.g., "two inmates"), group them into a single node called "Unknown Group" with the label "Group". DO NOT use plurals like "Inmates". 
     - DO NOT invent variations like "Inmate1", "Inmate2", "Officers", "Corrupt Officer", or "External".
     
     CRITICAL RULE 2: STRICT PREDICATE TRANSLATION (No Synonyms Allowed)
@@ -58,27 +59,28 @@ class Prompt:
     - If the text uses passive voice (e.g., "Jackson was attacked by Miller"), you MUST REVERSE the subject/object to keep the active predicate: {"subject": "Miller", "predicate": "ASSAULTS", "object": "Jackson"}.
     
     ### EXAMPLE INPUT ###
-    "Officer Smith reports that Jackson hid a knife and was arguing with Miller. Jackson targets the Iron Syndicate and plans an attack."
+    "Officer Smith reports that the senior inmate Jackson hid a knife and was arguing with an unidentified suspect. Jackson targets the rival Iron Syndicate and plans an attack."
     
     ### EXAMPLE OUTPUT ###
     {
       "entities": [
+        {"entity": "Smith", "label": "Staff"},
         {"entity": "Jackson", "label": "Inmate"},
         {"entity": "Knife", "label": "Weapon"},
-        {"entity": "Miller", "label": "Inmate"},
+        {"entity": "Unknown Inmate", "label": "Inmate"},
         {"entity": "Iron Syndicate", "label": "Group"}
       ],
       "relations": [
+        {"subject": "Smith", "predicate": "ASSOCIATED_WITH", "object": "Jackson"},
         {"subject": "Jackson", "predicate": "POSSESSES", "object": "Knife"},
-        {"subject": "Jackson", "predicate": "COMMUNICATES_WITH", "object": "Miller"},
+        {"subject": "Jackson", "predicate": "COMMUNICATES_WITH", "object": "Unknown Inmate"},
         {"subject": "Jackson", "predicate": "THREATENS", "object": "Iron Syndicate"}
       ]
     }
-
     CRITICAL RULE 3: GRAPH INTEGRITY
     - Ensure entity names are capitalized and stripped of titles (e.g., use 'Miller' instead of 'Inmate Miller').
     - Resolve pronouns to their actual entity names based on the context.
-    - Every entity you extract MUST be connected to at least one relationship. No floating nodes.
+    - Every entity you extract MUST BE CONNECTED to at least one relationship. No floating nodes.
 
     CRITICAL RULE 4: JSON OUTPUT ONLY
     - OUTPUT ONLY VALID JSON. START DIRECTLY WITH {:
