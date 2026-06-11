@@ -18,29 +18,30 @@ from core.kg_sna_layer.graph_builder import calculate_strict_fold_topology
 class RiskEscalationGNN(torch.nn.Module):
     def __init__(self, num_node_features, hidden_channels, edge_dim=3):
         super(RiskEscalationGNN, self).__init__()
+        self.edge_norm = torch.nn.BatchNorm1d(edge_dim)
         # GATv2Conv (Graph Attention) learns which neighboring nodes are the most dangerous.
-        self.conv1 = GATv2Conv(num_node_features, hidden_channels)
-        self.conv2 = GATv2Conv(hidden_channels, hidden_channels)
+        self.conv1 = GATv2Conv(num_node_features, hidden_channels, edge_dim=edge_dim)
+        self.conv2 = GATv2Conv(hidden_channels, hidden_channels, edge_dim=edge_dim)
         
         # Linear layer to classify the edge (Escalation vs. No Escalation)
-        #self.classifier = torch.nn.Linear((hidden_channels * 2) + edge_dim, 1)
-        self.classifier = torch.nn.Sequential(
-            torch.nn.Linear((hidden_channels * 2) + edge_dim, 32),
-            torch.nn.ReLU(),
-            torch.nn.Dropout(p=0.3),
-            torch.nn.Linear(32, 1)
-        )
+        self.classifier = torch.nn.Linear((hidden_channels * 2) + edge_dim, 1)
+        #self.classifier = torch.nn.Sequential(
+        #    torch.nn.Linear((hidden_channels * 2) + edge_dim, 32),
+        #    torch.nn.ReLU(),
+        #    torch.nn.Dropout(p=0.3),
+        #    torch.nn.Linear(32, 1)
+        #)
 
     def forward(self, x, edge_index, edge_attr):
-        # 1. Message Passing
-        x = self.conv1(x, edge_index)
+        # 1. Message Passing.
+        edge_attr = self.edge_norm(edge_attr)
+        x = self.conv1(x, edge_index, edge_attr)
         x = F.relu(x)
-        x = F.dropout(x, p=0.5, training=self.training)        
-        x = self.conv2(x, edge_index)
+        #x = F.dropout(x, p=0.5, training=self.training)        
+        x = self.conv2(x, edge_index, edge_attr)
         
         # 2. Edge Classification (Combine features of Node A and Node B)
         row, col = edge_index
-
         edge_features = torch.cat([x[row], x[col], edge_attr], dim=1)
         
         # 3. Predict the probability of escalation
@@ -86,12 +87,22 @@ def fetch_graph_from_neo4j(uri, user, password):
         RETURN a.name AS source, 
                b.name AS target, 
                r.risk_weight AS weight,
+               type(r) AS rel_type,  
                meta.common_neighbors AS cn,
                meta.jaccard AS jac,
                meta.adamic_adar AS aa
         ORDER BY a.name ASC, b.name ASC, type(r) ASC
         """
         edges = session.run(edge_query).data()
+
+        taxonomy_mapping = {
+            'AFFILIATED_WITH': 0, 'ASSAULTS': 1, 'ASSOCIATED_WITH': 2, 
+            'COMMUNICATES_WITH': 3, 'CONTAINS': 4, 'DISTRIBUTES': 5, 
+            'EXCHANGES': 6, 'LOCATED_IN': 7, 'POSSESSES': 8, 
+            'SELF_HARM': 9, 'THREATENS': 10
+        }
+
+        num_classes = len(taxonomy_mapping)
         
         edge_index = []
         labels = [] 
@@ -99,6 +110,7 @@ def fetch_graph_from_neo4j(uri, user, password):
         edge_features_baseline = []
 
         edge_weights_list = []
+        edge_taxonomy_list = []
 
         for e in edges:
             src = node_mapping.get(e['source'])
@@ -117,7 +129,14 @@ def fetch_graph_from_neo4j(uri, user, password):
 
                 # Capture the raw severity weight to power our topological math!
                 edge_weights_list.append(weight) # <--- CAPTURE WEIGHT
-                
+
+                #Capture taxonomy
+                one_hot = [0.0] * num_classes
+                tax_label = e['rel_type']
+                if tax_label in taxonomy_mapping:
+                    one_hot[taxonomy_mapping[tax_label]] = 1.0
+                edge_taxonomy_list.append(one_hot)
+                    
                 # Extract the 3 Edge Features (default to 0.0 if Neo4j returns None)
                 cn = float(e['cn'] or 0.0)
                 jac = float(e['jac'] or 0.0)
@@ -133,13 +152,14 @@ def fetch_graph_from_neo4j(uri, user, password):
         edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous() 
         y = torch.tensor(labels, dtype=torch.float)
         edge_weight_tensor = torch.tensor(edge_weights_list, dtype=torch.float) # <--- NEW TENSOR
+        edge_taxonomy_tensor = torch.tensor(edge_taxonomy_list, dtype=torch.float) # <--- NEW TENSOR
         
         edge_attr_enriched = torch.tensor(edge_features_enriched, dtype=torch.float)
         edge_attr_baseline = torch.tensor(edge_features_baseline, dtype=torch.float)
 
         # 4. Construct the Final Data Objects
-        data_enriched = Data(x=x_enriched, edge_index=edge_index, y=y, edge_attr=edge_attr_enriched, edge_weight=edge_weight_tensor)
-        data_baseline = Data(x=x_baseline, edge_index=edge_index, y=y, edge_attr=edge_attr_baseline, edge_weight=edge_weight_tensor)
+        data_enriched = Data(x=x_enriched, edge_index=edge_index, y=y, edge_attr=edge_attr_enriched, edge_weight=edge_weight_tensor, taxonomy=edge_taxonomy_tensor)
+        data_baseline = Data(x=x_baseline, edge_index=edge_index, y=y, edge_attr=edge_attr_baseline, edge_weight=edge_weight_tensor, taxonomy=edge_taxonomy_tensor)
         
         return data_baseline, data_enriched, reverse_mapping
 
@@ -202,7 +222,7 @@ def graph_edge_oversample(train_data):
     return balanced_train_data
 
 def train_model(model, data, epochs=100):
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.005, weight_decay=5e-4)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=5e-4)
     criterion = torch.nn.BCEWithLogitsLoss()
 
     history = {'loss': [], 'acc': []}
@@ -234,16 +254,24 @@ def train_model(model, data, epochs=100):
             
     return model, history
 
-def evaluate_model(model, data, threshold=0.55):
+def evaluate_model(model, data, threshold=0.55, is_enriched=False):
     model.eval() 
+    num_nodes = data.x.size(0)
+    
     with torch.no_grad():
-        # 1. Get raw logits from the model
-        logits = model(data.x, data.edge_index, data.edge_attr)
+        # Reconstruct the structural metrics
+        weights = data.edge_weight if is_enriched else None
+        full_edge_attr = calculate_strict_fold_topology(
+            data.edge_index, data.edge_index, num_nodes, edge_weights=weights
+        )
         
-        # 2. Manually apply Sigmoid to get probabilities (0.0 to 1.0)
+        # Reconstruct the semantic taxonomy dimensions
+        if is_enriched:
+            full_edge_attr = torch.cat([full_edge_attr, data.taxonomy], dim=1)
+            
+        logits = model(data.x, data.edge_index, full_edge_attr)
         predictions = torch.sigmoid(logits)
         
-        # 3. Use our new, highly-sensitive threshold
         preds_binary = (predictions >= threshold).float().numpy()
         y_true = data.y.numpy()
         preds_probs = predictions.numpy()
@@ -285,6 +313,16 @@ def evaluate_with_kfold(model_template, data, n_splits=5, epochs=250, is_enriche
         test_edge_attr = calculate_strict_fold_topology(
             train_edge_index, test_edge_index, num_nodes, edge_weights=train_edge_weights
         ) 
+
+        if is_enriched:
+            # Slice the 11-dimensional taxonomy vectors for this specific fold split
+            train_taxonomy = data.taxonomy[train_idx]
+            test_taxonomy = data.taxonomy[test_idx]
+            
+            # Combine the 8 structural features with the 11 behavior classes via tensor concatenation
+            train_edge_attr = torch.cat([train_edge_attr, train_taxonomy], dim=1)
+            test_edge_attr = torch.cat([test_edge_attr, test_taxonomy], dim=1)
+
         # 3. Assemble Safe Data Objects
         train_data = Data(
             x=data.x,
@@ -327,72 +365,34 @@ def evaluate_with_kfold(model_template, data, n_splits=5, epochs=250, is_enriche
     return np.concatenate(oof_y_true), np.concatenate(oof_y_pred_probs), all_histories
 
 
-def evaluate_with_kfold_dep(model_template, data, n_splits=5, epochs=250):
-    skf = RepeatedStratifiedKFold(n_splits=n_splits, n_repeats=5, random_state=42)
-    all_histories = []
-
-    y_array = data.y.cpu().numpy().flatten() 
-    edge_indices = np.arange(len(y_array))
-
-    oof_y_true = []
-    oof_y_pred_probs = []
-
-    for _, (train_idx, test_idx) in enumerate(skf.split(edge_indices, y_array)):
-        
-        # 1. Slice the Graph for the current fold
-        train_data = Data(
-            x=data.x,
-            edge_index=data.edge_index[:, train_idx],
-            y=data.y[train_idx],
-            edge_attr=data.edge_attr[train_idx]
-        )
-
-        test_data = Data(
-            x=data.x,
-            edge_index=data.edge_index[:, test_idx],
-            y=data.y[test_idx],
-            edge_attr=data.edge_attr[test_idx]
-        )
-
-        # 2. Balance the Training Data strictly (Leaves Test Data untouched)
-        balanced_train_data = graph_edge_oversample(train_data)
-
-        # 3. Spawn a fresh, blank model
-        fold_model = copy.deepcopy(model_template)
-        fold_model.apply(reset_weights)
-
-        # 4. Train on the Balanced Train Slice
-        # (Passing balanced_train_data instead of train_data)
-        trained_fold_model, fold_history = train_model(fold_model, balanced_train_data, epochs=epochs)
-
-        # 5. Predict on the unseen, imbalanced Test Slice
-        trained_fold_model.eval()
-        with torch.no_grad():
-            logits = trained_fold_model(test_data.x, test_data.edge_index, test_data.edge_attr)
-            probs = torch.sigmoid(logits).cpu().numpy()
-
-        # 6. Save the honest predictions
-        oof_y_true.append(test_data.y.cpu().numpy().flatten())
-        oof_y_pred_probs.append(probs.flatten())
-
-    return oof_y_true, oof_y_pred_probs
-
 # ==========================================
 # 4. ACTIONABLE INTELLIGENCE (INFERENCE)
 # ==========================================
-def generate_threat_report(model, data, reverse_mapping, threshold=0.55):
+def generate_threat_report(model, data, reverse_mapping, threshold=0.55, is_enriched=False):
     """
-    Translates raw PyTorch tensor predictions back into human-readable alerts.
+    Translates raw PyTorch tensor predictions back into human-readable alerts,
+    dynamically reconstructing the edge feature space to avoid dimension mismatches.
     """
     model.eval()
+    num_nodes = data.x.size(0)
+    
     with torch.no_grad():
-        logits = model(data.x, data.edge_index, data.edge_attr)
+        # 1. Reconstruct the full structural topology features (6 or 8 dimensions)
+        weights = data.edge_weight if is_enriched else None
+        full_edge_attr = calculate_strict_fold_topology(
+            data.edge_index, data.edge_index, num_nodes, edge_weights=weights
+        )
+        
+        # 2. Append the 11-dimensional taxonomy vector if using the enriched model
+        if is_enriched:
+            full_edge_attr = torch.cat([full_edge_attr, data.taxonomy], dim=1)
+            
+        # 3. Pass the fully reconstructed attribute tensor to the model
+        logits = model(data.x, data.edge_index, full_edge_attr)
         predictions = torch.sigmoid(logits).numpy() 
         
     alerts = []
-    # Loop through every edge in the network
     for i, prob_array in enumerate(predictions):
-        # FIX 1: Extract the scalar float from the numpy array!
         prob = prob_array[0]        
         
         if prob >= threshold:
