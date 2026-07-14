@@ -220,3 +220,4 @@ neo4j_data/
 **.png
 extract_detect_**.json
 data_for_test**.txt
+**.csv
