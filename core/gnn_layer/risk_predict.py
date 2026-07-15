@@ -1,5 +1,6 @@
 import torch
 import copy
+import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.data import Data
 from torch_geometric.nn import GATv2Conv
@@ -46,7 +47,30 @@ class RiskEscalationGNN(torch.nn.Module):
         
         # 3. Predict the probability of escalation
         return self.classifier(edge_features)
+    
+class FocalLoss(nn.Module):
+    def __init__(self, alpha=0.25, gamma=2.0, reduction='mean'):
+        super(FocalLoss, self).__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.reduction = reduction
 
+    def forward(self, inputs, targets):
+        # Calculate standard BCE
+        BCE_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction='none')
+        
+        # Calculate the probabilities
+        pt = torch.exp(-BCE_loss) 
+        
+        # Apply the focal loss formula
+        F_loss = self.alpha * (1-pt)**self.gamma * BCE_loss
+
+        if self.reduction == 'mean':
+            return torch.mean(F_loss)
+        elif self.reduction == 'sum':
+            return torch.sum(F_loss)
+        else:
+            return F_loss
 # ==========================================
 # 2. DATA EXTRACTION
 # ==========================================
@@ -223,7 +247,8 @@ def graph_edge_oversample(train_data):
 
 def train_model(model, data, epochs=100):
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=5e-4)
-    criterion = torch.nn.BCEWithLogitsLoss()
+    #criterion = torch.nn.BCEWithLogitsLoss()
+    criterion = FocalLoss(alpha=0.25, gamma=2.0)
 
     history = {'loss': [], 'acc': []}
     model.train()
