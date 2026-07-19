@@ -333,7 +333,7 @@ async def process_entry(text):
 
 # TEST BATCH PROCESSOR
 async def process_entry_file(): 
-    f = open(demo.FILE_TEST, 'r', encoding='utf-8')
+    f = open(demo.FILE_PAPER, 'r', encoding='utf-8')
     lines = [line.strip() for line in f if line != '\n']
     f.close()
     

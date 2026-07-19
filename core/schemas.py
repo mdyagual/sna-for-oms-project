@@ -44,7 +44,7 @@ class EntityMap:
         "Staff": ["Guard", "Employee", "Warden", "Personnel"],
         "Contraband": ["Drugs", "Narcotics", "Phone", "Cell Phone", "Contraband", "Prescription Narcotics", "Commissary", "Commissary Items", "Commissary Goods"],
         "Weapon": ["SharpObject", "Shiv", "Shank", "Blade"],
-        "InternalLocation": ["Location", "Cell", "Area", "Yard", "Basketball Court", "Block", "Wing", "Tier", "Unit", "Segregation", "Medical", "Kitchen"]    
+        "InternalLocation": ["Location", "Cell", "Area", "Yard", "Basketball Court", "Block", "Block A", "Block B", "Block C", "Wing", "Tier", "Unit", "Segregation", "Medical", "Kitchen"]    
         }
 
     COMPILED_LABEL_MAP = {
@@ -75,6 +75,7 @@ class NameResolutionMap:
             "Unknown Group", "Unidentified Group", "Medical Staff", "Medical"
         ],
         "DROP_ME_GENERIC": [
+            "Gang Lieutenant", "Lieutenant", "Gang Leader", "Leader", "Cartel Lieutenant", "Faction Lieutenant",
             # Base Generic Drops
             "Generic", "Gang", "Group", "Coordinated Gang", "Cartel", "Syndicate", 
             "Inmates", "Officers", "Staff", "Staff Member", "Guards", "Factions", 
@@ -219,7 +220,9 @@ class Entity(BaseModel):
             "factions", "structure", "activities", "schematics", "specifications", 
             "instructions", "retribution", "corruption", "privileges", "opportunities", 
             "status", "drawings", "windows", "period", "hours", "restraints", 
-            "connections", "oversight", "details", "assaults", "incident"
+            "connections", "oversight", "details", "assaults", "incident",
+            # 🔥 THE NEW LOCATION INCINERATORS 🔥
+            "block", "yard", "cafeteria", "gym", "wing", "tier", "cell block", "cellblock", "recreation"
         ]
         
         # If the string contains any of these abstract concept words, instantly incinerate it
@@ -258,7 +261,9 @@ class Entity(BaseModel):
         KNOWN_INMATES = [
             "Viper", "Runner", "Miller", "Jackson", "O'Reilly", "Chen", 
             "Batista", "Smalls", "Kincaid", "Torres", "Washington", 
-            "Diaz", "Petrov", "Rossi", "Carver"
+            "Diaz", "Petrov", "Rossi", "Carver", "Jenkins", "Boone", "Silva", "Cruz", "Wallace", "Bishop", "Thorne", 
+            "Vance", "Hayes", "Dalton", "Mercer", "Knight", "Foster", "Gable", "Rollins", "Atkins", "Brooks", "Cobb", "Evans", "Grier","Knox", 
+            "Logan", "Nash", "Pierce", "Reed", "Tate", "Vance", "Wade", "York", "Zane"
         ]
 
         if name_title in KNOWN_INMATES:

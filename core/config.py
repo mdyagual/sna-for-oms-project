@@ -12,7 +12,7 @@ class Token:
 class Neo4J:
     USER: str = os.getenv("NEO4J_USER","")
     PASS: str = os.getenv("NEO4J_PASS","")
-    URL: str = os.getenv("NEO4J_URL","")
+    URL: str = os.getenv("NEO4J_URL_PAPER","")
 
 @dataclass(frozen=True)
 class LLMConfig:   
@@ -96,7 +96,9 @@ class Prompt:
 @dataclass(frozen=True)
 class Demo:
     FILE_TEST = "./data/files/data_for_test.txt"
+    FILE_PAPER = "./data/files/data_for_paper.txt"
     DB_CACHE = "./data/extract_detect_cache.json"
+    DB_PAPER ="./data/extract_detect_paper.json"
 
 
 token = Token()

@@ -4,7 +4,7 @@ from tinydb import TinyDB, Query
 from core.config import demo
 
 
-db = TinyDB(demo.DB_CACHE, indent=4)
+db = TinyDB(demo.DB_PAPER, indent=4)
 Record = Query()
 
 logger = logging.getLogger(__name__)
