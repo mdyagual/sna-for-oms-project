@@ -282,7 +282,7 @@ def wipe_sna_metrics(uri, user, pwd):
         
     print("🧹 Graph successfully reset to its pure semantic state!") 
 
-def calculate_strict_fold_topology(reference_edge_index, target_edge_index, num_nodes, edge_weights=None):
+def calculate_strict_fold_topology_original(reference_edge_index, target_edge_index, num_nodes, edge_weights=None):
     # 1. Build the Safe Training Graph (Directed)
     G_ref = nx.DiGraph() 
     G_ref.add_nodes_from(range(num_nodes))
@@ -341,3 +341,45 @@ def calculate_strict_fold_topology(reference_edge_index, target_edge_index, num_
         edge_features.append(base_feats)
         
     return torch.tensor(edge_features, dtype=torch.float)       
+
+#Corrected
+def calculate_strict_fold_topology(reference_edge_index, target_edge_index, num_nodes, edge_weights=None):
+    G_ref = nx.DiGraph()
+    G_ref.add_nodes_from(range(num_nodes))
+    edges = reference_edge_index.t().tolist()
+
+    if edge_weights is not None:
+        weights = edge_weights.tolist()
+        aggressiveness = [0.0] * num_nodes      # sum of outgoing weights (raw edge list)
+        reputation = [0.0] * num_nodes          # sum of incoming weights (raw edge list)
+        tie = {}                                # parallel edges accumulate into one tie
+        for (u, v), w in zip(edges, weights):
+            aggressiveness[u] += w
+            reputation[v] += w
+            tie[(u, v)] = tie.get((u, v), 0.0) + w
+        G_ref.add_edges_from(
+            (u, v, {'weight': w, 'distance': 1.0 / w if w > 0 else 1e6}) for (u, v), w in tie.items())
+    else:
+        G_ref.add_edges_from(edges)
+
+    use_w = edge_weights is not None
+    betweenness = nx.betweenness_centrality(G_ref, weight='distance' if use_w else None)
+    try:
+        eigenvector = nx.eigenvector_centrality(G_ref, max_iter=1000, weight='weight' if use_w else None)
+    except nx.PowerIterationFailedConvergence:
+        eigenvector = {n: 0.0 for n in G_ref.nodes()}
+
+    G_un = G_ref.to_undirected()
+    edge_features = []
+    for u, v in target_edge_index.t().tolist():
+        cn = len(list(nx.common_neighbors(G_un, u, v)))
+        try:
+            jac = next(nx.jaccard_coefficient(G_un, [(u, v)]))[2]
+        except ZeroDivisionError:
+            jac = 0.0
+        feats = [cn, jac, betweenness.get(u, 0.0), betweenness.get(v, 0.0),
+                 eigenvector.get(u, 0.0), eigenvector.get(v, 0.0)]
+        if use_w:
+            feats.extend([aggressiveness[u], reputation[v]])
+        edge_features.append(feats)
+    return torch.tensor(edge_features, dtype=torch.float)

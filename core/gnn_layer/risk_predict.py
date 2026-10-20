@@ -12,6 +12,13 @@ from sklearn.model_selection import RepeatedStratifiedKFold
 from sklearn.metrics import roc_auc_score, recall_score
 from core.kg_sna_layer.graph_builder import calculate_strict_fold_topology
 
+import pandas as pd
+from sklearn.model_selection import StratifiedGroupKFold
+from sklearn.metrics import average_precision_score, precision_recall_curve, precision_recall_fscore_support
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import make_pipeline
+
 
 # ==========================================
 # 1. THE MODEL ARCHITECTURE
@@ -33,7 +40,7 @@ class RiskEscalationGNN(torch.nn.Module):
         #    torch.nn.Linear(32, 1)
         #)
 
-    def forward(self, x, edge_index, edge_attr):
+    def forwardV1(self, x, edge_index, edge_attr):
         # 1. Message Passing.
         edge_attr = self.edge_norm(edge_attr)
         x = self.conv1(x, edge_index, edge_attr)
@@ -47,10 +54,21 @@ class RiskEscalationGNN(torch.nn.Module):
         
         # 3. Predict the probability of escalation
         return self.classifier(edge_features)
+
+    def forward(self, x, edge_index, edge_attr, cls_edge_index=None, cls_edge_attr=None):
+        mp_attr = self.edge_norm(edge_attr)
+        x = F.relu(self.conv1(x, edge_index, mp_attr))
+        x = self.conv2(x, edge_index, mp_attr)
+        if cls_edge_index is None:
+            cls_edge_index, cls_attr = edge_index, mp_attr
+        else:
+            cls_attr = self.edge_norm(cls_edge_attr)      # use only in eval mode
+        row, col = cls_edge_index
+        return self.classifier(torch.cat([x[row], x[col], cls_attr], dim=1))
     
-class FocalLoss(nn.Module):
+class FocalLossV1(nn.Module):
     def __init__(self, alpha=0.25, gamma=2.0, reduction='mean'):
-        super(FocalLoss, self).__init__()
+        super(FocalLossV1, self).__init__()
         self.alpha = alpha
         self.gamma = gamma
         self.reduction = reduction
@@ -70,7 +88,18 @@ class FocalLoss(nn.Module):
         elif self.reduction == 'sum':
             return torch.sum(F_loss)
         else:
-            return F_loss
+            return 
+
+class FocalLoss(nn.Module):
+    def __init__(self, alpha=0.5, gamma=2.0, reduction='mean'):
+        super().__init__(); self.alpha, self.gamma, self.reduction = alpha, gamma, reduction
+
+    def forward(self, inputs, targets):
+        bce = F.binary_cross_entropy_with_logits(inputs, targets, reduction='none')
+        pt = torch.exp(-bce)
+        alpha_t = self.alpha * targets + (1 - self.alpha) * (1 - targets)
+        loss = alpha_t * (1 - pt) ** self.gamma * bce
+        return loss.mean() if self.reduction == 'mean' else loss.sum() if self.reduction == 'sum' else loss
 # ==========================================
 # 2. DATA EXTRACTION
 # ==========================================
@@ -104,7 +133,7 @@ def fetch_graph_from_neo4j(uri, user, password):
 
         # 2. Fetch Edges, Taxonomy Weights, AND Topological Edge Features
       
-        edge_query = """
+        edge_queryv1 = """
         MATCH (a)-[r]->(b) 
         WHERE type(r) <> 'SNA_TIE_STRENGTH'
         OPTIONAL MATCH (a)-[meta:SNA_TIE_STRENGTH]->(b)
@@ -117,6 +146,16 @@ def fetch_graph_from_neo4j(uri, user, password):
                meta.adamic_adar AS aa
         ORDER BY a.name ASC, b.name ASC, type(r) ASC
         """
+        edge_query = """
+            MATCH (a)-[r]->(b)
+            WHERE type(r) <> 'SNA_TIE_STRENGTH'
+            RETURN a.name AS source, b.name AS target, r.risk_weight AS weight,
+                type(r) AS rel_type, r.log_id AS log_id, r.taxonomy AS taxonomy
+            ORDER BY a.name ASC, b.name ASC, type(r) ASC, r.log_id ASC
+            """
+
+        ESCALATION_CLASSES = {"THREAT", "EXTREMIST", "RADICALISM"}
+        log_ids, y_w38 = [], []
         edges = session.run(edge_query).data()
 
         taxonomy_mapping = {
@@ -152,7 +191,12 @@ def fetch_graph_from_neo4j(uri, user, password):
                 labels.append([1.0 if weight >= 3.8 else 0.0])
 
                 # Capture the raw severity weight to power our topological math!
-                edge_weights_list.append(weight) # <--- CAPTURE WEIGHT
+                #edge_weights_list.append(weight) # <--- CAPTURE WEIGHT
+                labels.append([1.0 if e['taxonomy'] in ESCALATION_CLASSES else 0.0])   # primary label
+                y_w38.append([1.0 if weight >= 3.8 else 0.0])                           # sensitivity label
+                log_ids.append(e['log_id'])
+                edge_features_enriched.append([0.0, 0.0, 0.0])    # features are computed per fold
+                edge_features_baseline.append([0.0, 0.0, 0.0])
 
                 #Capture taxonomy
                 one_hot = [0.0] * num_classes
@@ -181,10 +225,17 @@ def fetch_graph_from_neo4j(uri, user, password):
         edge_attr_enriched = torch.tensor(edge_features_enriched, dtype=torch.float)
         edge_attr_baseline = torch.tensor(edge_features_baseline, dtype=torch.float)
 
+        uniq = {l: i for i, l in enumerate(sorted(set(log_ids), key=str))}
+        log_id_t = torch.tensor([uniq[l] for l in log_ids], dtype=torch.long)
+        y_w38_t = torch.tensor(y_w38, dtype=torch.float)
+
         # 4. Construct the Final Data Objects
         data_enriched = Data(x=x_enriched, edge_index=edge_index, y=y, edge_attr=edge_attr_enriched, edge_weight=edge_weight_tensor, taxonomy=edge_taxonomy_tensor)
         data_baseline = Data(x=x_baseline, edge_index=edge_index, y=y, edge_attr=edge_attr_baseline, edge_weight=edge_weight_tensor, taxonomy=edge_taxonomy_tensor)
-        
+
+        for d in (data_enriched, data_baseline):
+            d.log_id, d.y_w38 = log_id_t, y_w38_t
+
         return data_baseline, data_enriched, reverse_mapping
 
 # ==========================================
@@ -248,7 +299,8 @@ def graph_edge_oversample(train_data):
 def train_model(model, data, epochs=100):
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=5e-4)
     #criterion = torch.nn.BCEWithLogitsLoss()
-    criterion = FocalLoss(alpha=0.25, gamma=2.0)
+    #criterion = FocalLoss(alpha=0.25, gamma=2.0)
+    criterion = FocalLoss(alpha=0.5, gamma=2.0)
 
     history = {'loss': [], 'acc': []}
     model.train()
@@ -435,3 +487,99 @@ def generate_threat_report(model, data, reverse_mapping, threshold=0.55, is_enri
             
     alerts = sorted(alerts, key=lambda x: x['probability'], reverse=True)
     return alerts
+
+FEATURE_CONFIGS = {
+    "A_struct":      dict(weighted=False, reltype=False),   # baseline, 6 features
+    "B_struct+rel":  dict(weighted=True,  reltype=False),   # 8
+    "C_struct+type": dict(weighted=False, reltype=True),    # 17
+    "D_full":        dict(weighted=True,  reltype=True),    # 19
+}
+
+def best_f1_threshold(y_true, y_prob):
+    if int(np.sum(y_true)) == 0:
+        return 0.5
+    prec, rec, thr = precision_recall_curve(y_true, y_prob)
+    den = prec[:-1] + rec[:-1]
+    f1 = np.divide(2 * prec[:-1] * rec[:-1], den, out=np.zeros_like(den), where=den > 0)
+    return float(thr[int(np.argmax(f1))])
+
+def _prf(y_t, p_t, tau):
+    return precision_recall_fscore_support(y_t, (p_t >= tau).astype(int), average="binary", zero_division=0)[:3]
+
+def _features(data, ref_idx, tgt_idx, weighted):
+    w = data.edge_weight[ref_idx] if weighted else None
+    return calculate_strict_fold_topology(data.edge_index[:, ref_idx], data.edge_index[:, tgt_idx],
+                                          data.x.size(0), edge_weights=w)
+
+def _oof_train_features(data, fit, g, y, weighted, inner_k, seed):
+    """Features of each training edge from a reference graph that excludes its own narrative fold."""
+    out = torch.zeros(len(fit), 8 if weighted else 6)
+    inner = StratifiedGroupKFold(n_splits=inner_k, shuffle=True, random_state=seed)
+    for tr, te in inner.split(np.arange(len(fit)), y[fit], g[fit]):
+        out[te] = _features(data, fit[tr], fit[te], weighted)
+    return out
+
+def _attr(feats, data, cfg, part, idx):
+    parts = [feats[cfg["weighted"]][part]] + ([data.taxonomy[idx]] if cfg["reltype"] else [])
+    return torch.cat(parts, dim=1)
+
+def _record(rows, preds, name, fold, rep, y, val, p_val, test, p_test):
+    tau = best_f1_threshold(y[val], p_val)
+    yt, has_pos = y[test], y[test].sum() > 0
+    pr, rc, f1 = _prf(yt, p_test, tau)
+    rows.append(dict(config=name, fold=fold, rep=rep, tau=tau, n_test=len(test), pos_test=int(yt.sum()),
+                     auc=roc_auc_score(yt, p_test) if has_pos else np.nan,
+                     ap=average_precision_score(yt, p_test) if has_pos else np.nan,
+                     prevalence=float(yt.mean()), precision=pr, recall=rc, f1=f1,
+                     f1_oracle=_prf(yt, p_test, best_f1_threshold(yt, p_test))[2]))   # test-tuned, for reference only
+    for split, idx, p in (("val", val, p_val), ("test", test, p_test)):
+        preds.append(pd.DataFrame(dict(config=name, fold=fold, rep=rep, split=split, edge=idx, y=y[idx], p=p)))
+
+def evaluate_grouped_cv(data, groups, configs=FEATURE_CONFIGS, n_splits=5, n_repeats=5, epochs=150,
+                        hidden=64, val_splits=5, inner_k=5, seed=42, with_lr=True):
+    y = data.y.cpu().numpy().ravel().astype(int)
+    g = np.asarray(groups.cpu() if torch.is_tensor(groups) else groups)
+    rows, preds, hist = [], [], {n: [] for n in configs}
+
+    for rep in range(n_repeats):
+        outer = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=seed + rep)
+        for k, (trval, test) in enumerate(outer.split(np.arange(len(y)), y, g)):
+            fold = rep * n_splits + k
+            inner = StratifiedGroupKFold(n_splits=val_splits, shuffle=True, random_state=seed + 1000 + fold)
+            fit_rel, val_rel = next(inner.split(trval, y[trval], g[trval]))
+            fit, val = trval[fit_rel], trval[val_rel]
+            feats = {w: dict(fit=_oof_train_features(data, fit, g, y, w, inner_k, seed + fold),
+                             val=_features(data, fit, val, w), test=_features(data, fit, test, w))
+                     for w in (False, True)}                      # computed once, shared by all configs
+
+            for name, cfg in configs.items():
+                tr = Data(x=data.x, edge_index=data.edge_index[:, fit], y=data.y[fit],
+                          edge_attr=_attr(feats, data, cfg, "fit", fit))
+                bal = graph_edge_oversample(tr)
+                torch.manual_seed(seed + fold)
+                model = RiskEscalationGNN(data.x.size(1), hidden, edge_dim=tr.edge_attr.size(1))
+                model, h = train_model(model, bal, epochs=epochs); hist[name].append(h)
+                model.eval()
+                with torch.no_grad():
+                    def score(idx, part):
+                        out = model(bal.x, bal.edge_index, bal.edge_attr,
+                                    cls_edge_index=data.edge_index[:, idx],
+                                    cls_edge_attr=_attr(feats, data, cfg, part, idx))
+                        return torch.sigmoid(out).cpu().numpy().ravel()
+                    p_val, p_test = score(val, "val"), score(test, "test")
+                _record(rows, preds, name, fold, rep, y, val, p_val, test, p_test)
+
+                if with_lr:                                        # non-graph baseline, same features and splits
+                    clf = make_pipeline(StandardScaler(), LogisticRegression(max_iter=2000, class_weight="balanced"))
+                    clf.fit(_attr(feats, data, cfg, "fit", fit).numpy(), y[fit])
+                    _record(rows, preds, "LR_" + name, fold, rep, y,
+                            val, clf.predict_proba(_attr(feats, data, cfg, "val", val).numpy())[:, 1],
+                            test, clf.predict_proba(_attr(feats, data, cfg, "test", test).numpy())[:, 1])
+            if with_lr:                                            # relation type alone
+                clf = make_pipeline(StandardScaler(), LogisticRegression(max_iter=2000, class_weight="balanced"))
+                clf.fit(data.taxonomy[fit].numpy(), y[fit])
+                _record(rows, preds, "LR_type_only", fold, rep, y,
+                        val, clf.predict_proba(data.taxonomy[val].numpy())[:, 1],
+                        test, clf.predict_proba(data.taxonomy[test].numpy())[:, 1])
+            print(f"fold {fold + 1}/{n_splits * n_repeats} done")
+    return pd.DataFrame(rows), pd.concat(preds, ignore_index=True), hist
